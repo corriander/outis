@@ -67,7 +67,15 @@ After generating the key, you can also install it from the host with:
 ssh-copy-id -i data/ssh/id_ed25519.pub user@server
 ```
 Cookbook local downloads are stored in `./data/huggingface`, mounted as
-`~/.cache/huggingface` inside the Odysseus container.
+`~/.cache/huggingface` inside the Odysseus container. Cookbook-installed
+serve engines and Python CLIs are stored in `./data/local`, mounted as
+`~/.local`, so vLLM/llama.cpp installs survive container recreation.
+
+After downloading a model, open **Cookbook -> Serve**, pick the cached model,
+and launch it. When the server answers `/v1/models`, Odysseus adds it to the
+chat model picker automatically. For NVIDIA GPUs in Docker, install the NVIDIA
+Container Toolkit and add `gpus: all` to the `odysseus` service if `nvidia-smi`
+is not visible inside the container.
 
 Useful checks:
 ```bash

@@ -122,6 +122,11 @@ def setup_cookbook_routes() -> APIRouter:
                 [{"label": "retry with --trust-remote-code", "op": "append", "arg": "--trust-remote-code"}],
             ),
             (
+                r"Either a revision or a version must be specified|transformers\.integrations\.hub_kernels|kernels/layer",
+                "vLLM/Transformers kernel package mismatch.",
+                [{"label": "update vLLM, Transformers, and kernels on this server", "op": "dependency", "package": "vllm transformers kernels"}],
+            ),
+            (
                 r"Address already in use|bind.*address.*in use",
                 "Port is already in use.",
                 [{"label": "retry on port 8001", "op": "replace", "flag": "--port", "value": "8001"}],
