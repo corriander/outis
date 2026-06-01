@@ -323,10 +323,10 @@ export const ERROR_PATTERNS = [
     ],
   },
   {
-    pattern: /diffusers.*No module named|diffusers.*command not found/i,
-    message: 'Diffusers is not installed. Run: pip install diffusers transformers accelerate',
+    pattern: /No module named ['"]?torch|No module named ['"]?diffusers|diffusers.*command not found/i,
+    message: 'Diffusion serving needs PyTorch and diffusers. Install diffusers from Cookbook → Dependencies.',
     fixes: [
-      { label: 'Copy install command', action: () => _copyText('pip install diffusers transformers accelerate') },
+      { label: 'Copy install command', action: () => _copyText('python3 -m pip install "diffusers[torch]"') },
     ],
   },
   {

@@ -77,6 +77,13 @@ chat model picker automatically. For NVIDIA GPUs in Docker, install the NVIDIA
 Container Toolkit and add `gpus: all` to the `odysseus` service if `nvidia-smi`
 is not visible inside the container.
 
+The default Docker image is intentionally slim. For Python-based serve engines,
+use **Cookbook -> Dependencies** to install vLLM, SGLang, llama-cpp-python, or
+diffusers into the persisted `./data/local` mount. Native CUDA builds inside the
+container also require CUDA toolkit binaries such as `nvcc`; if those are not
+installed in the container, use prebuilt Python wheels or serve from a remote
+GPU host that already has the toolkit.
+
 Useful checks:
 ```bash
 docker compose ps

@@ -152,6 +152,11 @@ def setup_cookbook_routes() -> APIRouter:
                 [{"label": "install llama.cpp dependencies or llama-cpp-python[server]", "op": "dependency", "package": "llama-cpp-python[server]"}],
             ),
             (
+                r"No module named 'torch'|No module named torch|No module named 'diffusers'|No module named diffusers",
+                "Diffusion serving requires PyTorch and diffusers.",
+                [{"label": "install diffusers[torch] in Cookbook Dependencies", "op": "dependency", "package": "diffusers[torch]"}],
+            ),
+            (
                 r"403 Forbidden|401 Unauthorized|Access to model.*is restricted|gated repo|not in the authorized list|awaiting a review",
                 "Model access is gated or unauthorized.",
                 [{"label": "set HF token and request model access on HuggingFace", "op": "manual"}],
@@ -894,6 +899,12 @@ def setup_cookbook_routes() -> APIRouter:
                 runner_lines.append('export PATH="$HOME/.local/bin:$PATH"')
                 runner_lines.append('if ! python3 -c "import sglang" 2>/dev/null; then')
                 runner_lines.append('  echo "ERROR: SGLang is not installed. Open Cookbook -> Dependencies and install sglang on this server, then launch again."')
+                runner_lines.append('  exit 127')
+                runner_lines.append('fi')
+            elif "scripts/diffusion_server.py" in req.cmd or ".diffusion_server.py" in req.cmd:
+                runner_lines.append('export PATH="$HOME/.local/bin:$PATH"')
+                runner_lines.append('if ! python3 -c "import torch, diffusers" 2>/dev/null; then')
+                runner_lines.append('  echo "ERROR: Diffusion serving requires PyTorch + diffusers. Open Cookbook -> Dependencies and install diffusers on this server, then launch again."')
                 runner_lines.append('  exit 127')
                 runner_lines.append('fi')
 

@@ -501,7 +501,7 @@ def setup_shell_routes() -> APIRouter:
             {"name": "sglang", "pip": "sglang[all]", "desc": "Serve HF safetensors models via SGLang", "category": "LLM", "target": "remote"},
             {"name": "vllm", "pip": "vllm", "desc": "High-throughput LLM serving engine", "category": "LLM", "target": "remote"},
             # ── Image ── editor + diffusion model serving
-            {"name": "diffusers", "pip": "diffusers", "desc": "Image generation pipelines (SD, Flux)", "category": "Image", "target": "remote"},
+            {"name": "diffusers", "pip": "diffusers[torch]", "desc": "Image generation pipelines (SD, Flux) with PyTorch", "category": "Image", "target": "remote"},
             {"name": "rembg", "pip": "rembg[gpu]", "desc": "AI background removal for image editor", "category": "Image", "target": "local"},
             {"name": "realesrgan", "pip": "realesrgan", "desc": "AI denoise + upscale (Real-ESRGAN). Used by editor's Denoise and Upscale tools.", "category": "Image", "target": "local"},
             # ── Tools ──
@@ -600,7 +600,7 @@ def setup_shell_routes() -> APIRouter:
             return {"ok": False, "error": "No package specified"}
         # Validate against known packages to prevent arbitrary pip install
         known = {
-            "rembg[gpu]", "hf_transfer", "llama-cpp-python[server]", "sglang[all]", "diffusers",
+            "rembg[gpu]", "hf_transfer", "llama-cpp-python[server]", "sglang[all]", "diffusers", "diffusers[torch]",
             "TTS", "bark", "faster-whisper", "playwright", "realesrgan", "gfpgan",
             "insightface", "onnxruntime-gpu", "onnxruntime", "hdbscan",
         }
