@@ -2376,6 +2376,11 @@ async function initReminderSettings() {
 async function initEmailAccountsSettings() {
   const root = el('settings-modal');
   if (!root || !root.querySelector('[data-settings-panel="email"]')) return;
+  const manageBtn = el('set-email-open-integrations');
+  if (manageBtn && manageBtn.dataset.bound !== '1') {
+    manageBtn.dataset.bound = '1';
+    manageBtn.addEventListener('click', () => open('integrations'));
+  }
   const listEl = el('set-email-accounts-list');
   const msgEl = el('set-email-accounts-msg');
   const formEl = el('set-email-accounts-form');
@@ -3860,7 +3865,7 @@ async function initUnifiedIntegrations() {
         }
         el('uf-email-msg').textContent = 'Saved';
         el('uf-email-msg').style.color = 'var(--green,#50fa7b)';
-        integrationNotice = 'Email account saved. Go to Settings > Email for writing style, auto-tagging, spam triage, reminders, and reply settings.';
+        integrationNotice = 'Email account saved. For more settings, go to Settings > Email.';
         formEl.style.display = 'none';
         await renderList();
         notifyIntegrationsChanged();
