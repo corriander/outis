@@ -12,6 +12,7 @@ from typing import Optional, Tuple, Dict
 from urllib.parse import urlparse, urlunparse
 
 from core.database import SessionLocal, ModelEndpoint
+from src.constants import DEFAULT_OUTIS_SOURCE_URL, OUTIS_PROJECT_NAME
 from src.llm_core import _detect_provider, _host_match, _is_kimi_code_url, KIMI_CODE_USER_AGENT, _ollama_api_root
 
 logger = logging.getLogger(__name__)
@@ -295,8 +296,9 @@ def build_headers(api_key: Optional[str], base: str) -> Dict[str, str]:
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     if provider == "openrouter":
-        headers.setdefault("HTTP-Referer", "https://github.com/odysseus-dev/odysseus")
-        headers.setdefault("X-OpenRouter-Title", "Odysseus")
+        # Attribute Outis canonically; never disclose an operator's configured source URL.
+        headers.setdefault("HTTP-Referer", DEFAULT_OUTIS_SOURCE_URL)
+        headers.setdefault("X-OpenRouter-Title", OUTIS_PROJECT_NAME)
     if _is_kimi_code_url(base):
         headers.setdefault("User-Agent", KIMI_CODE_USER_AGENT)
     return headers

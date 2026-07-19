@@ -518,6 +518,31 @@ body.bg-pattern-sparkles {
       min-height: 48px;
     }
 
+    .outis-source-offer {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      padding: 4px 12px 0;
+      color: var(--fg);
+      font-size: 9px;
+      opacity: 0.4;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .outis-source-offer a {
+      color: inherit;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
+    .outis-source-offer a:hover,
+    .outis-source-offer a:focus-visible {
+      color: var(--accent, var(--red));
+      opacity: 1;
+    }
+
     .user-bar-left {
       display: flex;
       align-items: center;
@@ -587,6 +612,10 @@ body.bg-pattern-sparkles {
 
 
     .sidebar.hidden .sidebar-user-bar {
+      display: none;
+    }
+
+    .sidebar.hidden .outis-source-offer {
       display: none;
     }
 

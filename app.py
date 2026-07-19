@@ -925,8 +925,9 @@ async def serve_login(request: Request):
 
 @app.get("/api/version")
 async def get_version():
-    from core.constants import APP_VERSION
-    return {"version": APP_VERSION}
+    from src.project_info import project_metadata
+
+    return project_metadata()
 
 @app.get("/api/health")
 async def health_check() -> Dict[str, str]:

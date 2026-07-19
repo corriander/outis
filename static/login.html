@@ -231,9 +231,18 @@
   .logo-boat { width: 1.6rem; height: 1.6rem; margin-right: 0.4rem; vertical-align: -0.15em; color: var(--red); }
   .version-label {
     position: fixed; bottom: 12px; right: 16px;
-    font-size: 0.7rem; opacity: 0.25;
+    display: flex; gap: 0.45rem; align-items: center;
+    font-size: 0.7rem; opacity: 0.4;
     font-family: 'Fira Code', monospace;
-    pointer-events: none; user-select: none;
+    user-select: none;
+  }
+  .version-label a {
+    color: inherit;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .version-label a:hover, .version-label a:focus-visible {
+    color: var(--accent, var(--red));
   }
   /* Whirlpool-style spinner shown in the submit button while login /
      account-creation work is in flight — replaces the previous "Loading…"
@@ -305,7 +314,34 @@
     const vr = await fetch('/api/version');
     if (vr.ok) {
       const vd = await vr.json();
-      document.getElementById('version-label').textContent = 'v' + vd.version;
+      const footer = document.getElementById('version-label');
+      let sourceUrl;
+      let licenseUrl;
+      let validOffer = false;
+      try {
+        sourceUrl = new URL(vd.source_url, window.location.href);
+        licenseUrl = new URL(vd.license_url, window.location.href);
+        validOffer = /^https?:$/.test(sourceUrl.protocol) && /^https?:$/.test(licenseUrl.protocol);
+      } catch (_) {}
+      if (validOffer) {
+        const version = document.createElement('span');
+        version.textContent = (vd.project || 'Outis') + (vd.version ? ' v' + vd.version : '') +
+          (vd.build_ref ? '@' + String(vd.build_ref).slice(0, 12) : '');
+        if (vd.build_ref) version.title = 'Build ' + vd.build_ref;
+        const source = document.createElement('a');
+        source.href = sourceUrl.href;
+        source.textContent = 'Source';
+        source.target = '_blank';
+        source.rel = 'noopener noreferrer';
+        const license = document.createElement('a');
+        license.href = licenseUrl.href;
+        license.textContent = vd.license || 'AGPL-3.0-or-later';
+        license.target = '_blank';
+        license.rel = 'noopener noreferrer';
+        footer.replaceChildren(version, source, license);
+      } else {
+        footer.textContent = 'v' + vd.version;
+      }
     }
   } catch(e) {}
 

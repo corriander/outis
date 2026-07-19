@@ -7,6 +7,7 @@ headers), and the no-key case.
 import pytest
 
 from src import endpoint_resolver as er
+from src.llm_core import _provider_headers
 
 
 def test_headers_anthropic_uses_x_api_key():
@@ -41,8 +42,15 @@ def test_headers_openrouter_adds_attribution():
     h = er.build_headers("secret", "https://openrouter.ai/api/v1")
     assert h["Authorization"] == "Bearer secret"
     # OpenRouter ranks/labels apps via these headers.
-    assert h["HTTP-Referer"].startswith("https://github.com/")
-    assert h["X-OpenRouter-Title"] == "Odysseus"
+    assert h["HTTP-Referer"] == "https://github.com/corriander/outis"
+    assert h["X-OpenRouter-Title"] == "Outis"
+
+
+def test_llm_core_openrouter_adds_same_attribution():
+    h = _provider_headers("openrouter")
+
+    assert h["HTTP-Referer"] == "https://github.com/corriander/outis"
+    assert h["X-OpenRouter-Title"] == "Outis"
 
 
 def test_headers_omit_authorization_when_no_key():

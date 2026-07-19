@@ -1,17 +1,17 @@
-# Contributing to Odysseus
+# Contributing to Outis
 
 Thanks for helping. The project is moving quickly, so the best contributions are focused, easy to review, and easy to test.
 
 ## Branch model
 
-Odysseus has two branches:
+- **`main`** is the default Outis product branch. Create a focused topic branch
+  from it and open your Outis pull request back to `main`.
+- Odysseus **`main`** is the stable upstream intake baseline.
+- Odysseus **`dev`** is monitored for useful work and is the correct base for a
+  contribution intended for Odysseus itself.
 
-- **`dev`** — where all PRs land. Things can be in flux here; the merge button gets used freely.
-- **`main`** — what users run. Curated and tested by the maintainer. Fast-forwarded to a stable `dev` commit at each release.
-
-**Open your PR against `dev`, not `main`.** The GitHub "base" dropdown defaults to `dev`. If you opened a PR against `main` by accident, click "Edit" on the PR and change the base — no rebase needed.
-
-End-users cloning the repo will land on `dev` by default. To run the curated/stable version: `git checkout main` after clone.
+Do not merge the upstream development branch wholesale into an Outis topic
+branch. See [FORK.md](FORK.md) for selection and upstreaming policy.
 
 ## Before You Start
 
@@ -19,14 +19,19 @@ End-users cloning the repo will land on `dev` by default. To run the curated/sta
 - Prefer one bug fix or feature per pull request.
 - Avoid broad rewrites, formatting-only changes, or moving many files unless the issue is specifically about structure.
 - If you want to work on a large feature, open an issue first and describe the approach.
+- Treat public issues as durable project documentation. Include enough context
+  for a reader who has access only to this repository.
+- Keep integrations generic at the Outis boundary. A public change must not
+  require private source code, internal paths, or undocumented infrastructure
+  to be understood or implemented.
 
 ## Setup
 
 Docker is the recommended path for normal testing:
 
 ```bash
-git clone https://github.com/odysseus-dev/odysseus.git
-cd odysseus
+git clone https://github.com/corriander/outis.git
+cd outis
 cp .env.example .env
 docker compose up -d --build
 ```
@@ -74,11 +79,14 @@ Good pull requests usually include:
 
 Please keep PRs small. Large PRs that mix unrelated cleanup, formatting, refactors, and behavior changes are much harder to review.
 
-> **Auto-generated PRs.** If you are running an LLM agent (Devin, Cursor, OpenHands, Claude Code, etc.) against this repo: please open an issue describing the problem first instead of opening a PR directly. Bulk agent-generated PRs that don't match the project's visual style or contribution format will be closed without review, even when the underlying fix is correct.
+> **Agent-assisted contributions.** Agent assistance is welcome, but the author
+> remains responsible for scope, accuracy, tests, visual fit, and the public
+> context included in the PR. Do not publish bulk speculative PRs or raw agent
+> output. Large changes should start with a reviewed issue or design note.
 
 ## Style and visual changes
 
-Odysseus has an intentional visual style. PRs that ignore it will be closed without merge, no matter how correct the underlying code is.
+Outis inherits an intentional visual style from Odysseus. PRs that ignore it will be closed without merge, no matter how correct the underlying code is.
 
 Before submitting any change that affects what the app looks like — buttons, icons, fonts, colors, spacing, layout, CSS, HTML, SVG, or any `static/js/` module that draws to the DOM — please:
 
@@ -130,4 +138,10 @@ Issues with only "help", "does not work", or a screenshot without context may be
 Do not post secrets, API keys, private logs, personal documents, or public IPs in issues or pull requests.
 
 For security reports, follow [SECURITY.md](SECURITY.md).
+
+## Licence
+
+By contributing, you agree that your contribution may be distributed under the
+project's `AGPL-3.0-or-later` licence. Do not submit code or assets whose terms
+are incompatible with that licence. See [LICENSING.md](LICENSING.md).
 
