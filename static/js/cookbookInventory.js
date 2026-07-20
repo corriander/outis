@@ -1,0 +1,294 @@
+// Provider-backed, read-only model inventory for the Cookbook.
+
+let _document = null;
+let _loading = false;
+let _available = false;
+let _provider = null;
+
+function esc(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+export function formatArtifactBytes(value) {
+  const bytes = Number(value || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) return 'Unknown size';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const power = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  const amount = bytes / (1024 ** power);
+  const digits = power >= 3 ? 1 : (power === 0 ? 0 : amount < 10 ? 1 : 0);
+  return `${amount.toFixed(digits)} ${units[power]}`;
+}
+
+export function artifactSearchText(artifact) {
+  const observed = artifact?.observed || {};
+  return [
+    artifact?.filename,
+    artifact?.display_location,
+    ...(Array.isArray(artifact?.group_path) ? artifact.group_path : []),
+    observed.format,
+    observed.quantization,
+    observed.state,
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
+export function filterInventoryArtifacts(artifacts, query) {
+  const terms = String(query || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return Array.isArray(artifacts) ? artifacts.slice() : [];
+  return (Array.isArray(artifacts) ? artifacts : []).filter(artifact => {
+    const haystack = artifactSearchText(artifact);
+    return terms.every(term => haystack.includes(term));
+  });
+}
+
+const INVENTORY_COLLATOR = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: 'base',
+});
+
+function _artifactDirectory(artifact) {
+  const location = String(artifact?.display_location || '');
+  const filename = String(artifact?.filename || '');
+  const suffix = filename ? ` / ${filename}` : '';
+  if (suffix && location.endsWith(suffix)) return location.slice(0, -suffix.length);
+  return (Array.isArray(artifact?.group_path) ? artifact.group_path : []).join(' / ');
+}
+
+export function sortInventoryArtifacts(artifacts, mode = 'path') {
+  const items = Array.isArray(artifacts) ? artifacts.slice() : [];
+  const compare = (left, right) => {
+    const leftName = String(left?.filename || '');
+    const rightName = String(right?.filename || '');
+    const leftDirectory = _artifactDirectory(left);
+    const rightDirectory = _artifactDirectory(right);
+    const primary = mode === 'filename'
+      ? INVENTORY_COLLATOR.compare(leftName, rightName)
+      : INVENTORY_COLLATOR.compare(leftDirectory, rightDirectory);
+    if (primary) return primary;
+    const secondary = mode === 'filename'
+      ? INVENTORY_COLLATOR.compare(leftDirectory, rightDirectory)
+      : INVENTORY_COLLATOR.compare(leftName, rightName);
+    if (secondary) return secondary;
+    return INVENTORY_COLLATOR.compare(String(left?.id || ''), String(right?.id || ''));
+  };
+  return items.sort(compare);
+}
+
+export function artifactDisplayLabels(artifact, mode = 'path') {
+  const filename = String(artifact?.filename || 'Unnamed GGUF');
+  const location = String(artifact?.display_location || filename);
+  if (mode === 'filename') {
+    return { primary: filename, secondary: location };
+  }
+  const groupPath = artifact?.group_path;
+  const relativeLocation = Array.isArray(groupPath)
+    ? [...groupPath, filename].join(' / ')
+    : location.split(' / ').slice(1).join(' / ') || filename;
+  return { primary: relativeLocation, secondary: location };
+}
+
+function _dateLabel(value) {
+  const date = new Date(value || '');
+  if (!Number.isFinite(date.getTime())) return 'Unknown';
+  return date.toLocaleString();
+}
+
+function _artifactHtml(artifact, sortMode) {
+  const observed = artifact?.observed || {};
+  const labels = artifactDisplayLabels(artifact, sortMode);
+  const quant = observed.quantization || 'Unknown quant';
+  const state = observed.state || 'unknown';
+  const split = observed.split;
+  const splitLabel = split
+    ? `${Number(split.parts_present || 0)}/${Number(split.parts_expected || 0)} parts`
+    : '';
+  const fileRows = (Array.isArray(artifact?.files) ? artifact.files : []).map(file => (
+    `<div class="cookbook-inventory-file"><span>${esc(file.filename)}</span><span>${esc(formatArtifactBytes(file.size_bytes))}</span></div>`
+  )).join('');
+  return `
+    <article class="cookbook-inventory-item" data-artifact-id="${esc(artifact.id)}" tabindex="0" role="button" aria-expanded="false">
+      <div class="cookbook-inventory-summary">
+        <div class="cookbook-inventory-name-wrap">
+          <div class="cookbook-inventory-name">${esc(labels.primary)}</div>
+          ${labels.secondary ? `<div class="cookbook-inventory-location">${esc(labels.secondary)}</div>` : ''}
+        </div>
+        <div class="cookbook-inventory-meta">
+          <span class="cookbook-inventory-chip">GGUF</span>
+          <span class="cookbook-inventory-chip">${esc(quant)}</span>
+          ${splitLabel ? `<span class="cookbook-inventory-chip">${esc(splitLabel)}</span>` : ''}
+          <span class="cookbook-inventory-chip cookbook-inventory-state-${esc(state)}">${esc(state)}</span>
+          <span class="cookbook-inventory-size">${esc(formatArtifactBytes(observed.size_bytes))}</span>
+        </div>
+      </div>
+      <div class="cookbook-inventory-detail" hidden>
+        <dl>
+          <div><dt>Provider ID</dt><dd>${esc(artifact.id || '')}</dd></div>
+          <div><dt>Location</dt><dd>${esc(artifact.display_location || '')}</dd></div>
+          <div><dt>Modified</dt><dd>${esc(_dateLabel(observed.modified_at))}</dd></div>
+          <div><dt>Observed format</dt><dd>GGUF</dd></div>
+          <div><dt>Quantisation</dt><dd>${esc(quant)}</dd></div>
+        </dl>
+        ${fileRows ? `<div class="cookbook-inventory-files">${fileRows}</div>` : ''}
+      </div>
+    </article>`;
+}
+
+export function inventoryPanelHtml({ available = false, provider = null } = {}) {
+  const providerText = provider ? `Provider: ${esc(provider)}` : 'No external ArtifactStore configured';
+  return `
+    <div class="cookbook-group hidden" data-backend-group="Inventory">
+      <div class="admin-card cookbook-inventory-card">
+        <div class="cookbook-inventory-heading">
+          <div>
+            <h2>Inventory <span id="cookbook-inventory-count" class="memory-count"></span></h2>
+            <p class="memory-desc doclib-desc">Read-only GGUF artifacts reported by an external provider.</p>
+          </div>
+          <button type="button" class="hwfit-gpu-btn" id="cookbook-inventory-refresh" title="Refresh inventory" aria-label="Refresh inventory"${available ? '' : ' disabled'}>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10"/><path d="M3.51 15a9 9 0 0 0 14.85 3.36L23 14"/></svg>
+          </button>
+        </div>
+        <div class="cookbook-inventory-toolbar">
+          <input type="search" class="memory-search-input" id="cookbook-inventory-search" placeholder="Search local GGUFs…" />
+          <label class="cookbook-inventory-sort" for="cookbook-inventory-sort">
+            <span>Sort</span>
+            <select id="cookbook-inventory-sort" aria-label="Sort inventory">
+              <option value="path">Path</option>
+              <option value="filename">Filename</option>
+            </select>
+          </label>
+          <span id="cookbook-inventory-provider">${providerText}</span>
+        </div>
+        <div id="cookbook-inventory-status" class="cookbook-inventory-status">${available ? 'Open this tab to load the inventory.' : 'Configure an external ArtifactStore provider to enumerate local GGUFs.'}</div>
+        <div id="cookbook-inventory-list" class="cookbook-inventory-list"></div>
+      </div>
+    </div>`;
+}
+
+function _render() {
+  const list = document.getElementById('cookbook-inventory-list');
+  const status = document.getElementById('cookbook-inventory-status');
+  const count = document.getElementById('cookbook-inventory-count');
+  if (!list || !status || !count) return;
+  if (!_available) {
+    list.innerHTML = '';
+    count.textContent = '';
+    status.textContent = 'Configure an external ArtifactStore provider to enumerate local GGUFs.';
+    status.classList.add('is-empty');
+    return;
+  }
+  if (_loading) {
+    status.textContent = 'Loading inventory…';
+    status.classList.remove('is-error', 'is-empty');
+    return;
+  }
+  if (!_document) return;
+  const query = document.getElementById('cookbook-inventory-search')?.value || '';
+  const sortMode = document.getElementById('cookbook-inventory-sort')?.value || 'path';
+  const all = Array.isArray(_document.artifacts) ? _document.artifacts : [];
+  const artifacts = sortInventoryArtifacts(filterInventoryArtifacts(all, query), sortMode);
+  count.textContent = String(all.length);
+  list.innerHTML = artifacts.map(artifact => _artifactHtml(artifact, sortMode)).join('');
+  const providerName = _document.provider?.name || _document.provider?.id || _provider;
+  const providerEl = document.getElementById('cookbook-inventory-provider');
+  if (providerEl) providerEl.textContent = providerName ? `Provider: ${providerName}` : 'External provider';
+  const providerState = _document.status?.state || 'ready';
+  const unavailableSources = (_document.status?.sources || []).filter(source => source?.state !== 'ready');
+  if (providerState !== 'ready') {
+    status.textContent = unavailableSources.length
+      ? `${artifacts.length} shown · ${unavailableSources.length} source${unavailableSources.length === 1 ? '' : 's'} unavailable or partial.`
+      : `${artifacts.length} shown · provider status: ${providerState}.`;
+    status.classList.add('is-error');
+    status.classList.remove('is-empty');
+  } else if (!artifacts.length) {
+    status.textContent = query ? 'No GGUF artifacts match this search.' : 'The provider reported no GGUF artifacts.';
+    status.classList.add('is-empty');
+    status.classList.remove('is-error');
+  } else {
+    status.textContent = `${artifacts.length} GGUF artifact${artifacts.length === 1 ? '' : 's'} shown.`;
+    status.classList.remove('is-error', 'is-empty');
+  }
+}
+
+export async function loadInventory({ force = false, fetchImpl = globalThis.fetch } = {}) {
+  if (!_available || _loading || (_document && !force)) {
+    _render();
+    return _document;
+  }
+  _loading = true;
+  _render();
+  const refresh = document.getElementById('cookbook-inventory-refresh');
+  refresh?.classList.add('spinning');
+  if (refresh) refresh.disabled = true;
+  try {
+    const response = await fetchImpl('/api/cookbook/artifacts', { credentials: 'same-origin' });
+    let payload = null;
+    try { payload = await response.json(); } catch {}
+    if (!response.ok) throw new Error(payload?.detail || `Inventory request failed (HTTP ${response.status})`);
+    if (!payload || payload.schema_version !== 1 || !Array.isArray(payload.artifacts)) {
+      throw new Error('Inventory provider returned an unsupported response');
+    }
+    _document = payload;
+    return _document;
+  } catch (error) {
+    _document = null;
+    const status = document.getElementById('cookbook-inventory-status');
+    const list = document.getElementById('cookbook-inventory-list');
+    if (list) list.innerHTML = '';
+    if (status) {
+      status.textContent = error?.message || 'Inventory provider is unavailable.';
+      status.classList.add('is-error');
+      status.classList.remove('is-empty');
+    }
+    return null;
+  } finally {
+    _loading = false;
+    refresh?.classList.remove('spinning');
+    if (refresh) refresh.disabled = !_available;
+    if (_document) _render();
+  }
+}
+
+export function initInventory({ available = false, provider = null } = {}) {
+  if (_provider !== (provider || null)) _document = null;
+  _available = available === true;
+  _provider = provider || null;
+  const search = document.getElementById('cookbook-inventory-search');
+  const sort = document.getElementById('cookbook-inventory-sort');
+  const refresh = document.getElementById('cookbook-inventory-refresh');
+  const list = document.getElementById('cookbook-inventory-list');
+  search?.addEventListener('input', _render);
+  sort?.addEventListener('change', _render);
+  refresh?.addEventListener('click', () => loadInventory({ force: true }));
+  const toggle = target => {
+    const item = target?.closest?.('.cookbook-inventory-item');
+    if (!item) return;
+    const detail = item.querySelector('.cookbook-inventory-detail');
+    const expanded = item.getAttribute('aria-expanded') === 'true';
+    item.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+    item.classList.toggle('expanded', !expanded);
+    if (detail) detail.hidden = expanded;
+    if (!expanded) {
+      const artifact = (_document?.artifacts || []).find(candidate => candidate.id === item.dataset.artifactId);
+      if (artifact) {
+        document.dispatchEvent(new CustomEvent('cookbook:artifact-selected', {
+          detail: { provider: _document?.provider || null, artifact },
+        }));
+      }
+    }
+  };
+  list?.addEventListener('click', event => toggle(event.target));
+  list?.addEventListener('keydown', event => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    toggle(event.target);
+  });
+  _render();
+}
+
+export function activateInventory() {
+  return loadInventory();
+}

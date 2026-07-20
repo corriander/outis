@@ -20,8 +20,12 @@ export function cookbookUiPolicy(document) {
   const artifactStore = capabilities.artifact_store || {};
   const profiles = capabilities.profile_service || {};
   const runtime = capabilities.runtime_controller || {};
+  const inventoryProvider = artifactStore.operation_providers?.list || artifactStore.provider || null;
+  const inventory = artifactStore.list === true && inventoryProvider !== 'odysseus-native';
   return {
     browse: capabilities.catalogue?.browse !== false,
+    inventory,
+    inventoryProvider: inventory ? inventoryProvider : null,
     download: artifactStore.acquire === true,
     profiles: profiles.write === true,
     launch: runtime.start === true,

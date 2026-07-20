@@ -22463,6 +22463,243 @@ body.gallery-selecting .gallery-dl-btn,
 /* ── What Fits? (hardware model fitting tab in cookbook) ── */
 .cookbook-group.hidden { display: none !important; }
 
+/* Provider-backed GGUF inventory. This stays a list rather than adding more
+   columns to the already-dense model browser table; details expand in place. */
+.cookbook-group[data-backend-group="Inventory"] > .cookbook-inventory-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.cookbook-inventory-heading,
+.cookbook-inventory-toolbar,
+.cookbook-inventory-summary,
+.cookbook-inventory-meta,
+.cookbook-inventory-file {
+  display: flex;
+  align-items: center;
+}
+
+.cookbook-inventory-heading {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.cookbook-inventory-heading h2 {
+  margin: 0;
+  padding: 0;
+  line-height: 1;
+}
+
+.cookbook-inventory-toolbar {
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.cookbook-inventory-toolbar input {
+  flex: 1;
+  min-width: 120px;
+}
+
+.cookbook-inventory-sort {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 5px;
+  color: var(--fg);
+  font-size: 9px;
+  opacity: 0.72;
+}
+
+.cookbook-inventory-sort select {
+  min-width: 82px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 4px 21px 4px 7px;
+  background: var(--card);
+  color: var(--fg);
+  font: inherit;
+}
+
+#cookbook-inventory-provider {
+  max-width: 42%;
+  overflow: hidden;
+  color: var(--fg);
+  font-size: 10px;
+  opacity: 0.55;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cookbook-inventory-status {
+  margin: 8px 1px 5px;
+  color: var(--fg);
+  font-size: 10px;
+  opacity: 0.62;
+}
+
+.cookbook-inventory-status.is-error {
+  color: var(--red);
+  opacity: 0.9;
+}
+
+.cookbook-inventory-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 1px 8px;
+}
+
+.cookbook-inventory-item {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--card);
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.cookbook-inventory-item:hover,
+.cookbook-inventory-item:focus-visible,
+.cookbook-inventory-item.expanded {
+  border-color: var(--accent, var(--red));
+}
+
+.cookbook-inventory-summary {
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 9px 10px;
+}
+
+.cookbook-inventory-name-wrap {
+  min-width: 0;
+}
+
+.cookbook-inventory-name {
+  overflow: hidden;
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cookbook-inventory-location {
+  overflow: hidden;
+  margin-top: 3px;
+  color: var(--fg);
+  font-size: 9px;
+  opacity: 0.52;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cookbook-inventory-meta {
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.cookbook-inventory-chip {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 1px 6px;
+  color: var(--fg);
+  font-size: 8px;
+  opacity: 0.7;
+  text-transform: uppercase;
+}
+
+.cookbook-inventory-state-ready {
+  color: var(--green);
+}
+
+.cookbook-inventory-state-incomplete {
+  color: var(--red);
+}
+
+.cookbook-inventory-size {
+  min-width: 56px;
+  color: var(--fg);
+  font-size: 10px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.cookbook-inventory-detail {
+  border-top: 1px solid var(--border);
+  padding: 9px 10px 10px;
+}
+
+.cookbook-inventory-detail dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px 16px;
+  margin: 0;
+}
+
+.cookbook-inventory-detail dl > div {
+  min-width: 0;
+}
+
+.cookbook-inventory-detail dt {
+  color: var(--fg);
+  font-size: 8px;
+  opacity: 0.48;
+  text-transform: uppercase;
+}
+
+.cookbook-inventory-detail dd {
+  overflow-wrap: anywhere;
+  margin: 2px 0 0;
+  color: var(--fg);
+  font-size: 10px;
+}
+
+.cookbook-inventory-files {
+  margin-top: 9px;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+
+.cookbook-inventory-file {
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 0;
+  color: var(--fg);
+  font-size: 9px;
+  opacity: 0.72;
+}
+
+@media (max-width: 768px) {
+  .cookbook-inventory-summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .cookbook-inventory-meta {
+    justify-content: flex-start;
+  }
+
+  .cookbook-inventory-detail dl {
+    grid-template-columns: 1fr;
+  }
+
+  #cookbook-inventory-provider {
+    display: none;
+  }
+
+  .cookbook-inventory-toolbar {
+    flex-wrap: wrap;
+  }
+}
+
 /* Section titles */
 .cookbook-section-title {
   font-size: 12px;
