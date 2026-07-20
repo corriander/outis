@@ -22,6 +22,7 @@ from src.host_docker_access import (
     running_in_container as _running_in_container,
 )
 from src.optional_deps import prepare_optional_dependency_import
+from src.cookbook_capabilities import require_cookbook_capability
 
 # POSIX-only: `pty`/`fcntl` transitively import `termios`, which does NOT exist
 # on Windows, so importing them unconditionally crashed app startup there
@@ -1198,6 +1199,7 @@ def setup_shell_routes() -> APIRouter:
         never reflected because the check only ever looked at the local host.
         """
         _require_admin(request)
+        require_cookbook_capability("runtime_controller", "status")
         _reject_cross_site(request)
         import importlib.metadata as importlib_metadata
         import shlex
@@ -1763,6 +1765,7 @@ def setup_shell_routes() -> APIRouter:
     async def install_package(request: Request):
         """Install a package via pip. Admin only — pip install is effectively code exec."""
         _require_admin(request)
+        require_cookbook_capability("runtime_controller", "start")
         import sys as _sys
 
         body = await request.json()
@@ -1818,6 +1821,7 @@ def setup_shell_routes() -> APIRouter:
         sudo is required.
         """
         _require_admin(request)
+        require_cookbook_capability("runtime_controller", "start")
         body = await request.json()
         raw = body.get("packages") or []
         host = (body.get("remote_host") or "").strip()
@@ -1939,6 +1943,7 @@ def setup_shell_routes() -> APIRouter:
         stuck on a CPU-only llama-server.
         """
         _require_admin(request)
+        require_cookbook_capability("runtime_controller", "start")
         from routes.cookbook_helpers import _llama_cpp_rebuild_cmd
 
         body = await request.json()

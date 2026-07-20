@@ -12,7 +12,7 @@ import pytest
 from types import SimpleNamespace
 from fastapi import HTTPException
 
-from routes.codex_routes import _require_cookbook_scope
+from routes.codex_routes import _require_cookbook_scope, setup_codex_routes
 
 
 COOKBOOK_READ_SCOPES = {"cookbook:read", "cookbook:launch"}
@@ -116,3 +116,21 @@ class TestSourceCodeGate:
         assert violations == [], (
             f"Cookbook routes still use _scope_owner instead of _require_cookbook_scope: {violations}"
         )
+
+
+@pytest.mark.asyncio
+async def test_external_server_listing_stops_at_runtime_boundary(monkeypatch):
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.setenv("OUTIS_COOKBOOK_MODE", "external")
+    request = _api_token_request(scopes=["cookbook:read"])
+    endpoint = next(
+        route.endpoint
+        for route in setup_codex_routes().routes
+        if route.path == "/api/codex/cookbook/servers"
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await endpoint(request)
+
+    assert exc.value.status_code == 501
+    assert "runtime_controller.status" in exc.value.detail

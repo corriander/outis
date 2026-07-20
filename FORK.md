@@ -60,6 +60,14 @@ In particular:
 - private source, internal paths, credentials, topology, and operational detail
   are not copied into this repository.
 
+The first concrete boundary is the
+[Cookbook capability contract](docs/cookbook-capabilities.md). The inherited
+Cookbook remains the default (`native` mode); `external` mode declares a
+provider-owned deployment and becomes the default only when provider-backed
+capabilities reach parity with the inherited browser. Replacement is
+constructive: working inherited surfaces are not removed to satisfy the
+boundary.
+
 ## Public project record
 
 The public issue and pull-request history is part of the project's published

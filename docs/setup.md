@@ -12,6 +12,12 @@ Defaults work out of the box: clone, run, then configure models/search/email
 inside **Settings**. Only edit `.env` for deployment-level overrides like
 `APP_BIND`, `APP_PORT`, `AUTH_ENABLED`, `DATABASE_URL`, or a pre-seeded admin password.
 
+> **Cookbook mode:** Outis defaults to the full inherited Cookbook
+> (`OUTIS_COOKBOOK_MODE=native`), with broad Hugging Face search merged into
+> the model browser. `external` declares a provider-owned deployment and is
+> catalogue-only until such providers exist. See the
+> [Cookbook capability boundary](cookbook-capabilities.md).
+
 On first setup, Odysseus creates an admin account (`admin` unless
 `ODYSSEUS_ADMIN_USER` is set) and prints a temporary password in the terminal.
 For Docker installs, the same line is in `docker compose logs odysseus`.

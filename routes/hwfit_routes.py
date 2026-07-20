@@ -26,7 +26,7 @@ def _validate_detection_target(host: str = "", ssh_port: str = "") -> tuple[str,
     return host_value, port_value
 
 
-def _apply_manual_hardware(system, manual_mode="", manual_gpu_count="", manual_vram_gb="", manual_ram_gb="", manual_backend=""):
+def _apply_manual_hardware(system, manual_mode="", manual_gpu_count="", manual_vram_gb="", manual_ram_gb="", manual_backend="", manual_gpu_name=""):
     """Manual hardware is a "what if I had this setup" simulator —
     REPLACES the detected hardware entirely instead of adding to it.
 
@@ -79,7 +79,13 @@ def _apply_manual_hardware(system, manual_mode="", manual_gpu_count="", manual_v
     if backend not in _MANUAL_BACKENDS:
         backend = "cuda"
     total_vram = round(vram_each * count, 1)
-    gpu_name = f"Simulated {backend.upper()} GPU" + (f" × {count}" if count > 1 else "")
+    # A real GPU model name ("7900 XTX", "4090", "MI300X") lets the speed
+    # model's bandwidth table match — without it, a simulated GPU has no
+    # bandwidth entry and _estimate_speed falls back to the crude per-backend
+    # FALLBACK_K constants, which badly underestimates big dense models on
+    # modern cards.
+    base_name = str(manual_gpu_name or "").strip()[:64] or f"Simulated {backend.upper()} GPU"
+    gpu_name = base_name + (f" × {count}" if count > 1 else "")
     system["has_gpu"] = True
     system["gpu_name"] = gpu_name
     system["gpu_vram_gb"] = total_vram
@@ -110,6 +116,106 @@ def _apply_manual_hardware(system, manual_mode="", manual_gpu_count="", manual_v
     else:
         system.pop("unified_memory", None)
     return system
+
+
+def _resolve_ranking_system(
+    host="", ssh_port="", platform="", fresh=False,
+    gpu_count="", gpu_group="",
+    manual_mode="", manual_gpu_count="", manual_vram_gb="", manual_ram_gb="", manual_backend="", manual_gpu_name="",
+    ignore_detected_gpu=False, ignore_detected_ram=False,
+):
+    """Detect hardware and apply every user override exactly as /models does.
+
+    /discover ranks broad-search hits through this same resolution so a
+    search-sourced row and a catalogue row are scored against the identical
+    system — including the manually-entered profile (the container detection
+    is deliberately not trusted as the ranking target).
+    Returns the system dict; a dict with an "error" key means detection failed.
+    """
+    from services.hwfit.hardware import detect_system
+
+    system = deepcopy(detect_system(host=host, ssh_port=ssh_port, platform=platform, fresh=fresh))
+    if system.get("error"):
+        return system
+
+    if ignore_detected_gpu:
+        system["has_gpu"] = False
+        system["gpu_name"] = None
+        system["gpu_vram_gb"] = 0
+        system["gpu_count"] = 0
+        system["gpus"] = []
+        system["gpu_groups"] = []
+    if ignore_detected_ram:
+        system["available_ram_gb"] = 0
+        system["total_ram_gb"] = 0
+
+    system = _apply_manual_hardware(system, manual_mode, manual_gpu_count, manual_vram_gb, manual_ram_gb, manual_backend, manual_gpu_name)
+
+    # Keep the raw detection around so the UI can still show the box's full
+    # GPU complement even while we rank against one homogeneous pool.
+    system["detected_gpu_vram_gb"] = system.get("gpu_vram_gb")
+    system["detected_gpu_count"] = system.get("gpu_count")
+
+    groups = system.get("gpu_groups") or []
+    # Resolve the target homogeneous pool. Default (auto) = the largest pool,
+    # which for a uniform box is simply "all the GPUs" — no behaviour change.
+    grp = None
+    if groups:
+        try:
+            gidx = int(gpu_group) if gpu_group != "" else 0
+        except ValueError:
+            gidx = 0
+        if 0 <= gidx < len(groups):
+            grp = groups[gidx]
+
+    def _apply_group(g, n):
+        n = max(1, min(n, g["count"]))
+        system["gpu_count"] = n
+        system["gpu_vram_gb"] = round(g["vram_each"] * n, 1)
+        system["gpu_name"] = g["name"]
+        system["active_group"] = {**g, "use_count": n}
+
+    # Parse the optional count defensively (matches the gpu_group guard
+    # above): a non-numeric query param previously raised ValueError ->
+    # HTTP 500. A malformed value is ignored, same as omitting it.
+    try:
+        n = int(gpu_count) if gpu_count != "" else None
+    except ValueError:
+        n = None
+    if n is not None:
+        if n == 0:
+            # RAM-only mode: rank against system memory, offload allowed.
+            system["has_gpu"] = False
+            system["gpu_vram_gb"] = 0
+            system["gpu_count"] = 0
+            system["gpu_only"] = False
+            system.pop("active_group", None)
+        elif grp:
+            _apply_group(grp, n)
+            system["gpu_only"] = True
+        else:
+            # No per-GPU detail (older detection) — assume uniform split.
+            single_vram = (system.get("gpu_vram_gb") or 0) / (system.get("gpu_count") or 1)
+            system["gpu_count"] = max(1, n)
+            system["gpu_vram_gb"] = round(single_vram * max(1, n), 1)
+            system["gpu_only"] = True
+    elif grp:
+        # No explicit count, but we still pin to one pool so heterogeneous
+        # boxes rank against a real mixable group, not a fictional VRAM sum.
+        # gpu_only stays off here so the default view still surfaces offload.
+        _apply_group(grp, grp["count"])
+
+    return system
+
+
+def _parse_target_context(ctx):
+    try:
+        target_context = int(ctx) if ctx else None
+    except ValueError:
+        return None
+    if target_context is not None:
+        target_context = max(1024, min(target_context, 1000000))
+    return target_context
 
 
 def _run_model_probe(host: str, ssh_port: str, cmd: str) -> str:
@@ -182,27 +288,172 @@ def _inspect_model_path(model_path: str, host: str = "", ssh_port: str = "") -> 
 def setup_hwfit_routes():
     router = APIRouter(prefix="/api/hwfit", tags=["hwfit"])
 
+    @router.get("/capabilities")
+    def get_capabilities():
+        from src.cookbook_capabilities import cookbook_capabilities
+
+        return cookbook_capabilities()
+
+    @router.get("/discover")
+    async def discover_models(
+        query: str = "", limit: int = 50, cursor: str = "", show_all: bool = False,
+        use_case: str = "", ctx: str = "",
+        host: str = "", ssh_port: str = "", platform: str = "", fresh: bool = False,
+        gpu_count: str = "", gpu_group: str = "",
+        manual_mode: str = "", manual_gpu_count: str = "", manual_vram_gb: str = "", manual_ram_gb: str = "", manual_backend: str = "", manual_gpu_name: str = "",
+        ignore_detected_gpu: bool = False, ignore_detected_ram: bool = False,
+    ):
+        """Broad Hugging Face search, enriched into fit-ranked catalogue rows.
+
+        Each hit whose name (or safetensors metadata) yields a parameter count
+        goes through the SAME estimation + scoring path as hf_discovery dynamic
+        catalogue entries (#11) — no forked heuristics. Hits that can't be
+        enriched come back raw with compatibility unassessed, and in external
+        mode (no runtime_controller capability) every hit stays raw: ranking
+        against local hardware is a native-mode capability.
+
+        Zero-engagement repos (0 downloads AND 0 likes) are dropped by default;
+        `show_all=true` disables the filter and `hidden_count` states what it
+        removed — a stated search filter, not silent exclusion.
+        """
+        if not (query or "").strip():
+            raise HTTPException(400, "query is required")
+        from services.hwfit.fit import split_search_terms
+        from services.hwfit.hf_search import search_huggingface_models
+
+        # "-token" exclusions (same syntax the catalogue matcher supports).
+        # The Hub API has no negation, so only the positive terms go to HF and
+        # exclusions filter the returned hits (repo id, author, pipeline, tags).
+        positives, exclusions = split_search_terms(query)
+        if not positives:
+            raise HTTPException(400, "query needs at least one non-excluded term")
+
+        try:
+            page = await search_huggingface_models(" ".join(positives), limit=limit, cursor=cursor)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(502, "Hugging Face search failed") from exc
+
+        hits = page.get("models") or []
+        if exclusions:
+            def _hit_blob(h):
+                return " ".join(str(p or "") for p in (
+                    h.get("repo_id"), h.get("author"), h.get("pipeline_tag"),
+                    *(h.get("tags") or []),
+                )).lower()
+
+            hits = [h for h in hits if not any(x in _hit_blob(h) for x in exclusions)]
+        hidden_count = 0
+        if not show_all:
+            kept = [h for h in hits if (h.get("downloads") or 0) > 0 or (h.get("likes") or 0) > 0]
+            hidden_count = len(hits) - len(kept)
+            hits = kept
+        page["hidden_count"] = hidden_count
+
+        from src.cookbook_capabilities import cookbook_capabilities
+        runtime = cookbook_capabilities()["capabilities"].get("runtime_controller") or {}
+        if runtime.get("status") is not True:
+            page["models"] = hits
+            page["enriched"] = False
+            return page
+
+        host, ssh_port = _validate_detection_target(host, ssh_port)
+        system = _resolve_ranking_system(
+            host=host, ssh_port=ssh_port, platform=platform, fresh=fresh,
+            gpu_count=gpu_count, gpu_group=gpu_group,
+            manual_mode=manual_mode, manual_gpu_count=manual_gpu_count,
+            manual_vram_gb=manual_vram_gb, manual_ram_gb=manual_ram_gb, manual_backend=manual_backend, manual_gpu_name=manual_gpu_name,
+            ignore_detected_gpu=ignore_detected_gpu, ignore_detected_ram=ignore_detected_ram,
+        )
+        if system.get("error"):
+            page["models"] = hits
+            page["enriched"] = False
+            return page
+
+        from services.hwfit.fit import analyze_model
+        from services.hwfit.hf_discovery import entry_from_search_hit
+
+        target_context = _parse_target_context(ctx)
+        scoring_use_case = use_case if use_case not in ("", "extended") else "general"
+        rows = []
+        for hit in hits:
+            # Per-hit isolation: one malformed repo must not kill the page.
+            # An enrichment failure degrades that hit to a raw unassessed row,
+            # mirroring how the browser degrades a failed /discover call to
+            # catalogue-only.
+            try:
+                entry = entry_from_search_hit(hit)
+                analysis = None
+                if entry is not None:
+                    analysis = analyze_model(
+                        entry, system,
+                        scoring_use_case=scoring_use_case,
+                        target_context=target_context,
+                    )
+            except Exception:
+                entry = None
+                analysis = None
+            if analysis is None:
+                # No parameter estimate → no fit claim. The raw hit stays a
+                # visible, honestly-unassessed row.
+                rows.append(hit)
+                continue
+            row = dict(analysis)
+            # Catalogue-entry facts the scorer doesn't echo back, plus search
+            # provenance — the UI renders these rows first-class but must keep
+            # estimated-vs-curated distinguishable.
+            for key in ("capabilities", "format", "is_gguf", "mlx_only", "quantization",
+                        "min_ram_gb", "min_vram_gb", "hf_downloads", "hf_likes", "pipeline_tag"):
+                if key in entry and key not in row:
+                    row[key] = entry[key]
+            row["provider"] = entry.get("provider")
+            row["repo_id"] = hit.get("repo_id")
+            row["url"] = hit.get("url")
+            row["downloads"] = hit.get("downloads") or 0
+            row["likes"] = hit.get("likes") or 0
+            row["gated"] = hit.get("gated") or False
+            row["tags"] = hit.get("tags") or []
+            row["compatibility"] = hit.get("compatibility") or {}
+            row["_discovered"] = True
+            row["_source"] = "hf_search"
+            row["_estimated"] = True
+            rows.append(row)
+
+        page["models"] = rows
+        page["enriched"] = True
+        return page
+
     @router.get("/system")
     def get_system(host: str = "", ssh_port: str = "", platform: str = "", fresh: bool = False):
         """Detect and return current system hardware info. Pass host=user@server for remote.
         fresh=true bypasses the per-host cache (the Rescan button)."""
+        from src.cookbook_capabilities import require_cookbook_capability
+        require_cookbook_capability("runtime_controller", "status")
         from services.hwfit.hardware import detect_system
         host, ssh_port = _validate_detection_target(host, ssh_port)
         return detect_system(host=host, ssh_port=ssh_port, platform=platform, fresh=fresh)
 
     @router.get("/models")
-    def get_models(use_case: str = "", sort: str = "newest", limit: int = 50, search: str = "", host: str = "", quant: str = "", ctx: str = "", gpu_count: str = "", gpu_group: str = "", ssh_port: str = "", platform: str = "", fresh: bool = False, refresh_catalog: bool = False, manual_mode: str = "", manual_gpu_count: str = "", manual_vram_gb: str = "", manual_ram_gb: str = "", manual_backend: str = "", ignore_detected_gpu: bool = False, ignore_detected_ram: bool = False, fit_only: bool = False):
+    def get_models(use_case: str = "", sort: str = "newest", limit: int = 50, search: str = "", host: str = "", quant: str = "", ctx: str = "", gpu_count: str = "", gpu_group: str = "", ssh_port: str = "", platform: str = "", fresh: bool = False, refresh_catalog: bool = False, manual_mode: str = "", manual_gpu_count: str = "", manual_vram_gb: str = "", manual_ram_gb: str = "", manual_backend: str = "", manual_gpu_name: str = "", ignore_detected_gpu: bool = False, ignore_detected_ram: bool = False, fit_only: bool = False):
         """Rank LLM models against detected hardware and return scored results.
         gpu_count: override GPU count (0 = CPU only, 1-N = simulate N GPUs of the
             active group). gpu_group: index into system.gpu_groups (the homogeneous
             pools) to target — empty/auto = the largest pool. vLLM can only
             tensor-parallel across identical GPUs, so we never mix pools.
         fresh=true bypasses the hardware-detection cache."""
-        from services.hwfit.hardware import detect_system
+        from src.cookbook_capabilities import require_cookbook_capability
+        require_cookbook_capability("runtime_controller", "status")
         from services.hwfit.fit import rank_models
         from services.hwfit.models import get_models, model_catalog_path, refresh_dynamic_catalogs
         host, ssh_port = _validate_detection_target(host, ssh_port)
-        system = deepcopy(detect_system(host=host, ssh_port=ssh_port, platform=platform, fresh=fresh))
+        system = _resolve_ranking_system(
+            host=host, ssh_port=ssh_port, platform=platform, fresh=fresh,
+            gpu_count=gpu_count, gpu_group=gpu_group,
+            manual_mode=manual_mode, manual_gpu_count=manual_gpu_count,
+            manual_vram_gb=manual_vram_gb, manual_ram_gb=manual_ram_gb, manual_backend=manual_backend, manual_gpu_name=manual_gpu_name,
+            ignore_detected_gpu=ignore_detected_gpu, ignore_detected_ram=ignore_detected_ram,
+        )
         if system.get("error"):
             return {"system": system, "models": [], "error": system["error"]}
         catalog_refresh = None
@@ -218,79 +469,7 @@ def setup_hwfit_routes():
                 "error": f"Model catalog missing or empty: {model_catalog_path()}",
             }
 
-        if ignore_detected_gpu:
-            system["has_gpu"] = False
-            system["gpu_name"] = None
-            system["gpu_vram_gb"] = 0
-            system["gpu_count"] = 0
-            system["gpus"] = []
-            system["gpu_groups"] = []
-        if ignore_detected_ram:
-            system["available_ram_gb"] = 0
-            system["total_ram_gb"] = 0
-
-        system = _apply_manual_hardware(system, manual_mode, manual_gpu_count, manual_vram_gb, manual_ram_gb, manual_backend)
-
-        # Keep the raw detection around so the UI can still show the box's full
-        # GPU complement even while we rank against one homogeneous pool.
-        system["detected_gpu_vram_gb"] = system.get("gpu_vram_gb")
-        system["detected_gpu_count"] = system.get("gpu_count")
-
-        groups = system.get("gpu_groups") or []
-        # Resolve the target homogeneous pool. Default (auto) = the largest pool,
-        # which for a uniform box is simply "all the GPUs" — no behaviour change.
-        grp = None
-        if groups:
-            try:
-                gidx = int(gpu_group) if gpu_group != "" else 0
-            except ValueError:
-                gidx = 0
-            if 0 <= gidx < len(groups):
-                grp = groups[gidx]
-
-        def _apply_group(g, n):
-            n = max(1, min(n, g["count"]))
-            system["gpu_count"] = n
-            system["gpu_vram_gb"] = round(g["vram_each"] * n, 1)
-            system["gpu_name"] = g["name"]
-            system["active_group"] = {**g, "use_count": n}
-
-        # Parse the optional count defensively (matches the gpu_group guard
-        # above): a non-numeric query param previously raised ValueError ->
-        # HTTP 500. A malformed value is ignored, same as omitting it.
-        try:
-            n = int(gpu_count) if gpu_count != "" else None
-        except ValueError:
-            n = None
-        if n is not None:
-            if n == 0:
-                # RAM-only mode: rank against system memory, offload allowed.
-                system["has_gpu"] = False
-                system["gpu_vram_gb"] = 0
-                system["gpu_count"] = 0
-                system["gpu_only"] = False
-                system.pop("active_group", None)
-            elif grp:
-                _apply_group(grp, n)
-                system["gpu_only"] = True
-            else:
-                # No per-GPU detail (older detection) — assume uniform split.
-                single_vram = (system.get("gpu_vram_gb") or 0) / (system.get("gpu_count") or 1)
-                system["gpu_count"] = max(1, n)
-                system["gpu_vram_gb"] = round(single_vram * max(1, n), 1)
-                system["gpu_only"] = True
-        elif grp:
-            # No explicit count, but we still pin to one pool so heterogeneous
-            # boxes rank against a real mixable group, not a fictional VRAM sum.
-            # gpu_only stays off here so the default view still surfaces offload.
-            _apply_group(grp, grp["count"])
-
-        try:
-            target_context = int(ctx) if ctx else None
-        except ValueError:
-            target_context = None
-        if target_context is not None:
-            target_context = max(1024, min(target_context, 1000000))
+        target_context = _parse_target_context(ctx)
 
         rank_kwargs = {
             "use_case": use_case or None,
@@ -325,6 +504,8 @@ def setup_hwfit_routes():
         catalog (e.g. an ad-hoc HF repo), pass enough hints via a minimal synthetic
         entry isn't possible here, so we return [] and the UI keeps manual flags.
         """
+        from src.cookbook_capabilities import require_cookbook_capability
+        require_cookbook_capability("profile_service", "read")
         from services.hwfit.hardware import detect_system
         from services.hwfit.models import get_models
         from services.hwfit.profiles import compute_serve_profiles
@@ -410,8 +591,10 @@ def setup_hwfit_routes():
         }
 
     @router.get("/image-models")
-    def get_image_models(sort: str = "fit", search: str = "", host: str = "", gpu_count: str = "", ssh_port: str = "", platform: str = "", fresh: bool = False, manual_mode: str = "", manual_gpu_count: str = "", manual_vram_gb: str = "", manual_ram_gb: str = "", manual_backend: str = "", ignore_detected_gpu: bool = False, ignore_detected_ram: bool = False):
+    def get_image_models(sort: str = "fit", search: str = "", host: str = "", gpu_count: str = "", ssh_port: str = "", platform: str = "", fresh: bool = False, manual_mode: str = "", manual_gpu_count: str = "", manual_vram_gb: str = "", manual_ram_gb: str = "", manual_backend: str = "", manual_gpu_name: str = "", ignore_detected_gpu: bool = False, ignore_detected_ram: bool = False):
         """Rank image generation models against detected hardware."""
+        from src.cookbook_capabilities import require_cookbook_capability
+        require_cookbook_capability("runtime_controller", "status")
         from services.hwfit.hardware import detect_system
         from services.hwfit.image_models import rank_image_models
         host, ssh_port = _validate_detection_target(host, ssh_port)
@@ -428,7 +611,15 @@ def setup_hwfit_routes():
         if ignore_detected_ram:
             system["available_ram_gb"] = 0
             system["total_ram_gb"] = 0
-        system = _apply_manual_hardware(system, manual_mode, manual_gpu_count, manual_vram_gb, manual_ram_gb, manual_backend)
+        system = _apply_manual_hardware(
+            system,
+            manual_mode,
+            manual_gpu_count,
+            manual_vram_gb,
+            manual_ram_gb,
+            manual_backend,
+            manual_gpu_name,
+        )
         try:
             requested_gpu_count = int(gpu_count) if gpu_count != "" else None
         except ValueError:

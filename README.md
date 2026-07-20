@@ -51,7 +51,9 @@ runtime lifecycle, and other replaceable capabilities behind explicit service
 interfaces.
 
 - **Chat + Agents** — local/API models, tools, MCP, files, shell, skills, and memory.
-- **Cookbook** — hardware-aware model recommendations, downloads, and serving.
+- **Cookbook** — the inherited hardware-aware model browser, extended with
+  broad Hugging Face search merged into the same list, over an explicit
+  artifact/profile/runtime capability boundary for provider-owned deployments.
 - **Deep Research** — multi-step web research with source reading and report generation.
 - **Compare** — blind side-by-side model testing and synthesis.
 - **Documents** — writing-first editor with AI edits, suggestions, Markdown, HTML, CSV, and syntax highlighting.
