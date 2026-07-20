@@ -34,6 +34,12 @@ DEFAULT_FILE_EXTENSIONS: Set[str] = {
     '.csv', '.html', '.css', '.js', '.pdf'
 }
 
+# Tool-internal directories that match DEFAULT_FILE_EXTENSIONS but are never
+# the user's content: an Obsidian vault's .obsidian/ is minified plugin JS,
+# .git/ is repo internals, node_modules/ and __pycache__/ are build output.
+# Hidden entries are pruned by name; these cover the common non-hidden junk.
+EXCLUDED_DIR_NAMES: Set[str] = {'node_modules', '__pycache__', 'venv'}
+
 VECTOR_WEIGHT = 0.7
 KEYWORD_WEIGHT = 0.3
 
@@ -497,8 +503,17 @@ class VectorRAG:
         failed = 0
 
         try:
-            for root, _, files in os.walk(directory):
+            for root, dirs, files in os.walk(directory):
+                # Prune in place so os.walk never descends into hidden or
+                # junk directories (#5559). The passed-in root is exempt: a
+                # user who deliberately targets a hidden directory gets it.
+                dirs[:] = [
+                    d for d in dirs
+                    if not d.startswith('.') and d not in EXCLUDED_DIR_NAMES
+                ]
                 for fname in files:
+                    if fname.startswith('.'):
+                        continue
                     fpath = os.path.join(root, fname)
                     ext = Path(fname).suffix.lower()
                     if ext not in file_extensions:
