@@ -3,9 +3,11 @@
 import os
 import logging
 import shutil
+import threading
 import uuid
 from typing import Any, Dict, List, Tuple
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File, Depends
+from fastapi.concurrency import run_in_threadpool
 from src.request_models import DirectoryRequest
 from core.constants import BASE_DIR, PERSONAL_DIR, PERSONAL_UPLOADS_DIR
 from src.rag_singleton import get_rag_manager
@@ -17,6 +19,13 @@ from src.upload_limits import PERSONAL_UPLOAD_MAX_BYTES
 UPLOADS_DIR = PERSONAL_UPLOADS_DIR
 
 logger = logging.getLogger(__name__)
+
+# Serializes directory index jobs across requests. Now that indexing runs in
+# the threadpool (#5558), concurrent requests would otherwise run in parallel
+# and race PersonalDocsManager's unsynchronized list mutations and file
+# writes; before the threadpool move they serialized on the blocked event
+# loop, so one-at-a-time is behavior parity.
+_index_job_lock = threading.Lock()
 
 
 def _personal_upload_dir_for_owner(owner: str | None, *, create: bool = True) -> str:
@@ -207,12 +216,24 @@ def setup_personal_routes(personal_docs_manager, rag_manager, rag_available):
             # Use the RAGManager to index the directory
             rag = _rag()
             if rag:
-                result = rag.index_personal_documents(directory, owner=owner)
-                
+                def _index_directory():
+                    with _index_job_lock:
+                        result = rag.index_personal_documents(directory, owner=owner)
+                        if result["success"]:
+                            # Also update the personal_docs_manager to track
+                            # this directory. Kept inside the threadpool call:
+                            # it triggers refresh_index(), which re-extracts
+                            # text across tracked directories.
+                            personal_docs_manager.add_directory(directory, index=False)
+                        return result
+
+                # Indexing walks, embeds, and stores the whole tree — minutes
+                # on a real directory. The handler is async, so calling it
+                # inline runs it on the event loop and every other request
+                # queues behind it until it finishes (#5558).
+                result = await run_in_threadpool(_index_directory)
+
                 if result["success"]:
-                    # Also update the personal_docs_manager to track this directory
-                    personal_docs_manager.add_directory(directory, index=False)
-                    
                     return {
                         "success": True,
                         "message": f"Successfully indexed {result['indexed_count']} chunks from {directory}",
