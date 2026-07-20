@@ -18,6 +18,9 @@ The version 1 document contains four independently meaningful groups:
 - `runtime_controller`: query status, start or stop a runtime, and read logs.
 
 Each group names its provider, if any, and exposes operation-level booleans.
+When a deployment mixes providers within one group, `operation_providers`
+identifies the provider for each operation. For example, native acquisition can
+remain available while inventory enumeration comes from an external store.
 Backend enforcement is authoritative: operations whose capability is absent
 return HTTP 501 instead of falling through to the inherited local, SSH, tmux,
 PowerShell, or container implementations. The frontend keeps rendering the
@@ -34,16 +37,105 @@ elsewhere) until the replacement lands.
 
 `OUTIS_COOKBOOK_MODE=external` declares a deployment where artifact storage,
 profiles, and runtime lifecycle are owned by external providers. With no
-providers implemented yet, external mode is a deliberately reduced
-catalogue-only surface (browse and broad search; operational routes 501) and
-is not the recommended configuration. It becomes the intended default only
-when provider-backed capabilities reach parity with the inherited browser.
-Future providers should implement one or more capability groups without making
+providers configured, external mode is a deliberately reduced catalogue-only
+surface (browse and broad search; operational routes 501). Configuring an
+ArtifactStore adds read-only inventory without enabling acquisition, profile,
+or runtime operations. External mode becomes the intended default only when
+provider-backed capabilities reach parity with the inherited browser. Future
+providers should implement one or more capability groups without making
 unrelated groups appear available.
 
 Inherited hardware-fit routes are part of `runtime_controller.status` because
 they inspect a prospective execution host and may invoke SSH. They are not
 available in external mode.
+
+## External GGUF inventory
+
+Set `OUTIS_ARTIFACT_STORE_URL` to make the Cookbook's **Inventory** tab consume
+an external ArtifactStore. Outis calls:
+
+```text
+GET <provider>/v1/artifacts
+```
+
+The version 1 inventory envelope contains a provider identity, provider/source
+status, and artifacts with a provider-scoped stable ID, observed filename,
+display-safe location, size, modification time, format, quantisation when it
+can be derived from the filename, and readiness state. The first format adapter
+is intentionally GGUF-only. It groups complete split GGUF sets into one artifact
+and reports missing or temporary parts as incomplete. Other files and model
+stores, provenance, remote-catalogue matching, acquisition, and mutation are
+outside this first slice.
+
+The minimum envelope is:
+
+```json
+{
+  "schema_version": 1,
+  "provider": {"id": "directory", "name": "Directory inventory"},
+  "status": {
+    "state": "ready",
+    "observed_at": "2026-01-01T12:00:00Z",
+    "sources": [
+      {"id": "models", "label": "Local models", "state": "ready", "artifact_count": 1}
+    ]
+  },
+  "artifacts": [
+    {
+      "id": "models:family/example-Q4_K_M.gguf:0123456789ab",
+      "filename": "example-Q4_K_M.gguf",
+      "display_location": "Local models / family / example-Q4_K_M.gguf",
+      "group_path": ["family"],
+      "observed": {
+        "size_bytes": 4294967296,
+        "modified_at": "2026-01-01T11:00:00Z",
+        "format": "gguf",
+        "quantization": "Q4_K_M",
+        "state": "ready"
+      },
+      "files": [
+        {
+          "filename": "example-Q4_K_M.gguf",
+          "size_bytes": 4294967296,
+          "modified_at": "2026-01-01T11:00:00Z"
+        }
+      ]
+    }
+  ]
+}
+```
+
+`status.state` is `ready`, `partial`, or `unreachable`; an artifact's
+`observed.state` is `ready` or `incomplete`. Split artifacts also include an
+`observed.split` object with `parts_present` and `parts_expected`. Clients must
+treat unknown additive fields as optional so provenance can be added later
+without making it a prerequisite for inventory.
+
+Outis never receives the provider's scan root. A root label and its relative
+GGUF path form the display location; the real filesystem path remains provider
+private. A later profile service can consume the stable
+`{provider, artifact_id}` reference and resolve it in its own filesystem
+namespace, so Windows/WSL path translation does not become Outis UI logic.
+
+This repository includes a small reference provider implemented with the
+Python standard library. A WSL-hosted example is:
+
+```bash
+export OUTIS_ARTIFACT_PROVIDER_TOKEN='replace-with-a-long-random-value'
+python -m artifact_store.directory_provider \
+  --root models=/mnt/d/models \
+  --label 'models=Local models' \
+  --bind 0.0.0.0 \
+  --port 7331
+```
+
+Use the same secret as `OUTIS_ARTIFACT_STORE_TOKEN` in Outis and configure the
+URL reachable from the Outis container, commonly
+`http://host.docker.internal:7331`. The provider binds to loopback by default
+and refuses a non-loopback bind unless `OUTIS_ARTIFACT_PROVIDER_TOKEN` is set.
+Multiple `--root ID=PATH` and `--label ID=LABEL` options are supported. Root IDs
+must remain stable because they participate in artifact identity; labels may be
+changed without changing IDs.
 
 ## Boundary scope
 

@@ -779,6 +779,10 @@ app.include_router(setup_shell_routes())
 from routes.cookbook_routes import setup_cookbook_routes
 app.include_router(setup_cookbook_routes())
 
+# Provider-backed read-only model artifact inventory
+from routes.artifact_routes import setup_artifact_routes
+app.include_router(setup_artifact_routes())
+
 from routes.workspace_routes import setup_workspace_routes
 app.include_router(setup_workspace_routes())
 

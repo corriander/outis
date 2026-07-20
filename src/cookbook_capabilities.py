@@ -12,6 +12,8 @@ import os
 
 from fastapi import HTTPException
 
+from artifact_store.client import artifact_store_configured, configured_artifact_store_name
+
 
 _NATIVE_VALUES = {"native", "odysseus"}
 
@@ -21,6 +23,8 @@ def cookbook_capabilities() -> dict:
     native = raw_mode in _NATIVE_VALUES
     mode = "native" if native else "external"
     provider = "odysseus-native" if native else None
+    external_artifacts = artifact_store_configured()
+    artifact_list_provider = configured_artifact_store_name() if external_artifacts else provider
 
     return {
         "schema_version": 1,
@@ -32,10 +36,15 @@ def cookbook_capabilities() -> dict:
                 "inspect": True,
             },
             "artifact_store": {
-                "provider": provider,
-                "list": native,
+                "provider": artifact_list_provider,
+                "list": external_artifacts or native,
                 "acquire": native,
                 "delete": native,
+                "operation_providers": {
+                    "list": artifact_list_provider,
+                    "acquire": provider,
+                    "delete": provider,
+                },
             },
             "profile_service": {
                 "provider": provider,
