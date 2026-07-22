@@ -26,10 +26,13 @@ export function formatArtifactBytes(value) {
 
 export function artifactSearchText(artifact) {
   const observed = artifact?.observed || {};
+  const pathVariants = Array.isArray(artifact?.path_variants) ? artifact.path_variants : [];
   return [
     artifact?.filename,
+    artifact?.logical_path,
     artifact?.display_location,
     ...(Array.isArray(artifact?.group_path) ? artifact.group_path : []),
+    ...pathVariants.flatMap(variant => [variant?.label, variant?.value]),
     observed.format,
     observed.quantization,
     observed.state,
@@ -51,6 +54,12 @@ const INVENTORY_COLLATOR = new Intl.Collator(undefined, {
 });
 
 function _artifactDirectory(artifact) {
+  const logicalPath = String(artifact?.logical_path || '');
+  if (logicalPath) {
+    const segments = logicalPath.split('/');
+    segments.pop();
+    return segments.join(' / ');
+  }
   const location = String(artifact?.display_location || '');
   const filename = String(artifact?.filename || '');
   const suffix = filename ? ` / ${filename}` : '';
@@ -84,11 +93,36 @@ export function artifactDisplayLabels(artifact, mode = 'path') {
   if (mode === 'filename') {
     return { primary: filename, secondary: location };
   }
+  const logicalPath = String(artifact?.logical_path || '');
   const groupPath = artifact?.group_path;
-  const relativeLocation = Array.isArray(groupPath)
-    ? [...groupPath, filename].join(' / ')
-    : location.split(' / ').slice(1).join(' / ') || filename;
+  const relativeLocation = logicalPath
+    ? logicalPath.split('/').join(' / ')
+    : Array.isArray(groupPath)
+      ? [...groupPath, filename].join(' / ')
+      : location.split(' / ').slice(1).join(' / ') || filename;
   return { primary: relativeLocation, secondary: location };
+}
+
+export function artifactPathVariantValue(artifact, index) {
+  const variants = Array.isArray(artifact?.path_variants) ? artifact.path_variants : [];
+  const variant = variants[Number(index)];
+  return typeof variant?.value === 'string' ? variant.value : null;
+}
+
+export function artifactPathVariantsHtml(artifact) {
+  const variants = Array.isArray(artifact?.path_variants) ? artifact.path_variants : [];
+  const rows = variants.flatMap((variant, index) => {
+    if (!variant || typeof variant.label !== 'string' || typeof variant.value !== 'string') return [];
+    return [`
+      <div class="cookbook-inventory-path-variant">
+        <span class="cookbook-inventory-path-label">${esc(variant.label)}</span>
+        <code>${esc(variant.value)}</code>
+        <button type="button" class="hwfit-gpu-btn cookbook-inventory-path-copy" data-path-variant-index="${index}" title="Copy ${esc(variant.label)} path" aria-label="Copy ${esc(variant.label)} path">Copy</button>
+      </div>`];
+  }).join('');
+  return rows
+    ? `<div class="cookbook-inventory-paths"><h3>Concrete paths</h3>${rows}</div>`
+    : '';
 }
 
 function _dateLabel(value) {
@@ -109,6 +143,7 @@ function _artifactHtml(artifact, sortMode) {
   const fileRows = (Array.isArray(artifact?.files) ? artifact.files : []).map(file => (
     `<div class="cookbook-inventory-file"><span>${esc(file.filename)}</span><span>${esc(formatArtifactBytes(file.size_bytes))}</span></div>`
   )).join('');
+  const pathVariants = artifactPathVariantsHtml(artifact);
   return `
     <article class="cookbook-inventory-item" data-artifact-id="${esc(artifact.id)}" tabindex="0" role="button" aria-expanded="false">
       <div class="cookbook-inventory-summary">
@@ -126,15 +161,34 @@ function _artifactHtml(artifact, sortMode) {
       </div>
       <div class="cookbook-inventory-detail" hidden>
         <dl>
-          <div><dt>Provider ID</dt><dd>${esc(artifact.id || '')}</dd></div>
-          <div><dt>Location</dt><dd>${esc(artifact.display_location || '')}</dd></div>
+          <div><dt>Artifact ID</dt><dd>${esc(artifact.id || '')}</dd></div>
+          <div><dt>Source ID</dt><dd>${esc(artifact.source_id || '')}</dd></div>
+          <div><dt>Logical path</dt><dd>${esc(artifact.logical_path || '')}</dd></div>
+          <div><dt>Observation</dt><dd>${esc(artifact.observation || '')}</dd></div>
           <div><dt>Modified</dt><dd>${esc(_dateLabel(observed.modified_at))}</dd></div>
           <div><dt>Observed format</dt><dd>GGUF</dd></div>
           <div><dt>Quantisation</dt><dd>${esc(quant)}</dd></div>
         </dl>
+        ${pathVariants}
         ${fileRows ? `<div class="cookbook-inventory-files">${fileRows}</div>` : ''}
       </div>
     </article>`;
+}
+
+async function _copyText(value) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = value;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  textarea.remove();
 }
 
 export function inventoryPanelHtml({ available = false, provider = null } = {}) {
@@ -280,8 +334,26 @@ export function initInventory({ available = false, provider = null } = {}) {
       }
     }
   };
-  list?.addEventListener('click', event => toggle(event.target));
+  list?.addEventListener('click', event => {
+    const copyButton = event.target?.closest?.('[data-path-variant-index]');
+    if (copyButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      const item = copyButton.closest('.cookbook-inventory-item');
+      const artifact = (_document?.artifacts || []).find(candidate => candidate.id === item?.dataset.artifactId);
+      const value = artifactPathVariantValue(artifact, copyButton.dataset.pathVariantIndex);
+      if (value !== null) {
+        _copyText(value).then(() => {
+          copyButton.textContent = 'Copied';
+          window.setTimeout(() => { copyButton.textContent = 'Copy'; }, 1200);
+        }).catch(() => {});
+      }
+      return;
+    }
+    toggle(event.target);
+  });
   list?.addEventListener('keydown', event => {
+    if (event.target?.closest?.('[data-path-variant-index]')) return;
     if (event.key !== 'Enter' && event.key !== ' ') return;
     event.preventDefault();
     toggle(event.target);

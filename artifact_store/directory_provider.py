@@ -23,6 +23,9 @@ from urllib.parse import quote, urlsplit
 
 
 SCHEMA_VERSION = 1
+DEFAULT_PROVIDER_ID = "directory-reference"
+DEFAULT_PROVIDER_NAME = "Directory inventory"
+PROVIDER_CLASS = "directory"
 _ROOT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _SPLIT_GGUF_RE = re.compile(
     r"^(?P<prefix>.+)-(?P<part>\d{1,6})-of-(?P<total>\d{1,6})\.gguf$",
@@ -32,6 +35,27 @@ _TEMP_SUFFIXES = (".incomplete", ".partial", ".part", ".download", ".tmp")
 _QUANT_RE = re.compile(
     r"(?i)(UD-)?(IQ[0-9]_[A-Z0-9_]+|Q[0-9](?:_[A-Z0-9]+)+|BF16|F16|FP16|F32|Q8_0)"
 )
+_TEMPLATE_TOKEN_RE = re.compile(r"\{(path|root|rel)\}")
+
+
+@dataclass(frozen=True)
+class PathVariantTemplate:
+    """One publisher-defined opaque path variant.
+
+    ``template`` may contain the tokens ``{path}`` (absolute host path of the
+    primary file), ``{root}`` (absolute root path on the host) and ``{rel}``
+    (POSIX relative path within the root). Any other content is preserved
+    verbatim; Outis never parses or joins these strings.
+    """
+
+    label: str
+    template: str
+
+    def __post_init__(self) -> None:
+        if not self.label.strip():
+            raise ValueError("path variant label must not be empty")
+        if not self.template:
+            raise ValueError("path variant template must not be empty")
 
 
 @dataclass(frozen=True)
@@ -41,6 +65,7 @@ class DirectoryRoot:
     id: str
     path: Path
     label: str
+    path_variants: tuple[PathVariantTemplate, ...] = ()
 
     def __post_init__(self) -> None:
         if not _ROOT_ID_RE.fullmatch(self.id):
@@ -97,6 +122,56 @@ def _display_location(root: DirectoryRoot, relative_path: str) -> str:
     return " / ".join(str(part) for part in parts if str(part) not in {"", "."})
 
 
+def _logical_path(relative_path: str) -> str:
+    return Path(relative_path).as_posix()
+
+
+def _observation_token(files: list[_ObservedFile]) -> str:
+    fingerprint = [
+        (item.filename, int(item.size_bytes), item.modified_at)
+        for item in files
+    ]
+    fingerprint.sort()
+    payload = json.dumps(fingerprint, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _render_template(template: str, *, root_path: str, rel_path: str, path: str) -> str:
+    substitutions = {"path": path, "root": root_path, "rel": rel_path}
+
+    def replace(match: re.Match[str]) -> str:
+        return substitutions[match.group(1)]
+
+    return _TEMPLATE_TOKEN_RE.sub(replace, template)
+
+
+def _path_variants(
+    root: DirectoryRoot,
+    *,
+    primary: _ObservedFile,
+) -> list[dict]:
+    if not root.path_variants:
+        return []
+    root_path = str(root.path)
+    rel_path = _logical_path(primary.relative_path)
+    # ``relative_path`` names the intended artifact for temporary downloads,
+    # while path variants must report the file that was actually observed.
+    observed_relative = Path(primary.relative_path).parent / primary.filename
+    file_path = str(root.path / observed_relative)
+    return [
+        {
+            "label": variant.label,
+            "value": _render_template(
+                variant.template,
+                root_path=root_path,
+                rel_path=rel_path,
+                path=file_path,
+            ),
+        }
+        for variant in root.path_variants
+    ]
+
+
 def _artifact(
     root: DirectoryRoot,
     *,
@@ -105,6 +180,7 @@ def _artifact(
     relative_path: str,
     files: list[_ObservedFile],
     incomplete: bool,
+    primary: _ObservedFile,
     split_total: int | None = None,
 ) -> dict:
     parent = Path(relative_path).parent
@@ -121,9 +197,12 @@ def _artifact(
             "parts_present": len(files),
             "parts_expected": split_total,
         }
-    return {
+    artifact: dict = {
         "id": _artifact_id(root.id, identity_path),
+        "source_id": root.id,
+        "observation": _observation_token(files),
         "filename": filename,
+        "logical_path": _logical_path(relative_path),
         "display_location": _display_location(root, relative_path),
         "group_path": group_path,
         "observed": observed,
@@ -136,6 +215,10 @@ def _artifact(
             for item in files
         ],
     }
+    variants = _path_variants(root, primary=primary)
+    if variants:
+        artifact["path_variants"] = variants
+    return artifact
 
 
 def scan_directory_root(root: DirectoryRoot) -> tuple[list[dict], dict]:
@@ -210,6 +293,7 @@ def scan_directory_root(root: DirectoryRoot) -> tuple[list[dict], dict]:
             relative_path=item.relative_path,
             files=[item],
             incomplete=item.temporary,
+            primary=item,
         )
         for item in ordinary
     ]
@@ -237,6 +321,7 @@ def scan_directory_root(root: DirectoryRoot) -> tuple[list[dict], dict]:
                 relative_path=primary.relative_path,
                 files=files,
                 incomplete=incomplete,
+                primary=primary,
                 split_total=total,
             )
         )
@@ -249,9 +334,16 @@ def scan_directory_root(root: DirectoryRoot) -> tuple[list[dict], dict]:
 def inventory_document(
     roots: Iterable[DirectoryRoot],
     *,
-    provider_id: str = "directory",
-    provider_name: str = "Directory inventory",
+    provider_id: str = DEFAULT_PROVIDER_ID,
+    provider_name: str = DEFAULT_PROVIDER_NAME,
+    provider_class: str | None = PROVIDER_CLASS,
 ) -> dict:
+    provider_id = provider_id.strip()
+    provider_name = provider_name.strip()
+    if not provider_id:
+        raise ValueError("provider id must not be empty")
+    if not provider_name:
+        raise ValueError("provider name must not be empty")
     artifacts: list[dict] = []
     sources: list[dict] = []
     for root in roots:
@@ -266,9 +358,14 @@ def inventory_document(
         state = "partial"
     else:
         state = "ready"
+    provider: dict = {"id": provider_id, "name": provider_name}
+    if provider_class:
+        # ``class`` is advisory implementation-class metadata. Outis MUST NOT
+        # use it for identity decisions; only ``id`` is authoritative.
+        provider["class"] = provider_class
     return {
         "schema_version": SCHEMA_VERSION,
-        "provider": {"id": provider_id, "name": provider_name},
+        "provider": provider,
         "status": {
             "state": state,
             "observed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -278,7 +375,11 @@ def inventory_document(
     }
 
 
-def _parse_root(value: str, labels: dict[str, str]) -> DirectoryRoot:
+def _parse_root(
+    value: str,
+    labels: dict[str, str],
+    variants: dict[str, list[PathVariantTemplate]],
+) -> DirectoryRoot:
     if "=" not in value:
         raise ValueError("--root must use ID=PATH")
     root_id, raw_path = value.split("=", 1)
@@ -286,7 +387,12 @@ def _parse_root(value: str, labels: dict[str, str]) -> DirectoryRoot:
     raw_path = raw_path.strip()
     if not raw_path:
         raise ValueError("root path must not be empty")
-    return DirectoryRoot(root_id, Path(raw_path).expanduser(), labels.get(root_id, root_id))
+    return DirectoryRoot(
+        root_id,
+        Path(raw_path).expanduser(),
+        labels.get(root_id, root_id),
+        tuple(variants.get(root_id, ())),
+    )
 
 
 def _parse_assignment(value: str, option: str) -> tuple[str, str]:
@@ -298,7 +404,32 @@ def _parse_assignment(value: str, option: str) -> tuple[str, str]:
     return key.strip(), assigned.strip()
 
 
-def make_handler(roots: list[DirectoryRoot], provider_id: str, provider_name: str, token: str | None):
+def _parse_path_variant(value: str) -> tuple[str, PathVariantTemplate]:
+    """Parse ``--path-variant ROOT_ID:LABEL=TEMPLATE``.
+
+    Splits on the first ``:`` for the root id, then on the first ``=`` in the
+    remainder for the label and template. TEMPLATE may contain further ``:``
+    and ``=`` characters (e.g. Windows drive prefixes).
+    """
+
+    if ":" not in value:
+        raise ValueError("--path-variant must use ROOT_ID:LABEL=TEMPLATE")
+    root_id, remainder = value.split(":", 1)
+    if "=" not in remainder:
+        raise ValueError("--path-variant must use ROOT_ID:LABEL=TEMPLATE")
+    label, template = remainder.split("=", 1)
+    if not root_id.strip() or not label.strip() or not template:
+        raise ValueError("--path-variant must use non-empty ROOT_ID:LABEL=TEMPLATE")
+    return root_id.strip(), PathVariantTemplate(label.strip(), template)
+
+
+def make_handler(
+    roots: list[DirectoryRoot],
+    provider_id: str,
+    provider_name: str,
+    token: str | None,
+    provider_class: str | None = PROVIDER_CLASS,
+):
     class ArtifactRequestHandler(BaseHTTPRequestHandler):
         server_version = "OutisArtifactStore/1"
 
@@ -327,7 +458,12 @@ def make_handler(roots: list[DirectoryRoot], provider_id: str, provider_name: st
                     return
             self._send_json(
                 HTTPStatus.OK,
-                inventory_document(roots, provider_id=provider_id, provider_name=provider_name),
+                inventory_document(
+                    roots,
+                    provider_id=provider_id,
+                    provider_name=provider_name,
+                    provider_class=provider_class,
+                ),
             )
 
         def log_message(self, fmt: str, *args) -> None:
@@ -344,26 +480,63 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Serve a read-only GGUF ArtifactStore inventory")
     parser.add_argument("--root", action="append", required=True, metavar="ID=PATH")
     parser.add_argument("--label", action="append", default=[], metavar="ID=LABEL")
+    parser.add_argument(
+        "--path-variant",
+        action="append",
+        default=[],
+        metavar="ROOT_ID:LABEL=TEMPLATE",
+        help=(
+            "Publish an opaque path variant for artifacts in a root. TEMPLATE "
+            "may contain {path}, {root} and {rel} tokens. Repeatable."
+        ),
+    )
     parser.add_argument("--bind", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=7331)
-    parser.add_argument("--provider-id", default="directory")
-    parser.add_argument("--provider-name", default="Directory inventory")
+    parser.add_argument(
+        "--provider-id",
+        default=DEFAULT_PROVIDER_ID,
+        help=(
+            "Provider authority ID (opaque to clients). Operators SHOULD "
+            "override with a stable instance-scoped identifier when running "
+            "more than one provider."
+        ),
+    )
+    parser.add_argument("--provider-name", default=DEFAULT_PROVIDER_NAME)
+    parser.add_argument(
+        "--provider-class",
+        default=PROVIDER_CLASS,
+        help="Advisory implementation-class hint published in provider.class.",
+    )
     args = parser.parse_args(argv)
 
     try:
         labels = dict(_parse_assignment(value, "--label") for value in args.label)
-        roots = [_parse_root(value, labels) for value in args.root]
+        variants: dict[str, list[PathVariantTemplate]] = {}
+        for raw in args.path_variant:
+            root_id, template = _parse_path_variant(raw)
+            variants.setdefault(root_id, []).append(template)
+        roots = [_parse_root(value, labels, variants) for value in args.root]
     except ValueError as exc:
         parser.error(str(exc))
+    known_ids = {root.id for root in roots}
+    for orphan in sorted(set(variants) - known_ids):
+        parser.error(f"--path-variant references unknown root id {orphan!r}")
     token = os.getenv("OUTIS_ARTIFACT_PROVIDER_TOKEN", "").strip() or None
     if not _is_loopback(args.bind) and token is None:
         parser.error("OUTIS_ARTIFACT_PROVIDER_TOKEN is required when binding beyond loopback")
     if not 1 <= args.port <= 65535:
         parser.error("--port must be between 1 and 65535")
 
+    provider_id = args.provider_id.strip()
+    provider_name = args.provider_name.strip()
+    if not provider_id:
+        parser.error("--provider-id must not be empty")
+    if not provider_name:
+        parser.error("--provider-name must not be empty")
+    provider_class = args.provider_class.strip() or None
     server = ThreadingHTTPServer(
         (args.bind, args.port),
-        make_handler(roots, args.provider_id, args.provider_name, token),
+        make_handler(roots, provider_id, provider_name, token, provider_class),
     )
     print(f"[artifact-provider] serving {len(roots)} root(s) on http://{args.bind}:{args.port}")
     try:

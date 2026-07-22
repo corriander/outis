@@ -22668,6 +22668,47 @@ body.gallery-selecting .gallery-dl-btn,
   padding-top: 6px;
 }
 
+.cookbook-inventory-paths {
+  margin-top: 9px;
+  border-top: 1px solid var(--border);
+  padding-top: 7px;
+}
+
+.cookbook-inventory-paths h3 {
+  margin: 0 0 5px;
+  color: var(--fg);
+  font-size: 8px;
+  font-weight: 600;
+  opacity: 0.48;
+  text-transform: uppercase;
+}
+
+.cookbook-inventory-path-variant {
+  display: grid;
+  grid-template-columns: minmax(70px, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.cookbook-inventory-path-label {
+  color: var(--fg);
+  font-size: 9px;
+  opacity: 0.62;
+}
+
+.cookbook-inventory-path-variant code {
+  overflow-wrap: anywhere;
+  color: var(--fg);
+  font-size: 10px;
+  user-select: text;
+}
+
+.cookbook-inventory-path-copy {
+  min-width: 45px;
+  justify-content: center;
+}
+
 .cookbook-inventory-file {
   justify-content: space-between;
   gap: 12px;
@@ -22689,6 +22730,14 @@ body.gallery-selecting .gallery-dl-btn,
 
   .cookbook-inventory-detail dl {
     grid-template-columns: 1fr;
+  }
+
+  .cookbook-inventory-path-variant {
+    grid-template-columns: 1fr auto;
+  }
+
+  .cookbook-inventory-path-label {
+    grid-column: 1 / -1;
   }
 
   #cookbook-inventory-provider {

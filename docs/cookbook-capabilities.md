@@ -58,21 +58,25 @@ an external ArtifactStore. Outis calls:
 GET <provider>/v1/artifacts
 ```
 
-The version 1 inventory envelope contains a provider identity, provider/source
-status, and artifacts with a provider-scoped stable ID, observed filename,
-display-safe location, size, modification time, format, quantisation when it
-can be derived from the filename, and readiness state. The first format adapter
-is intentionally GGUF-only. It groups complete split GGUF sets into one artifact
-and reports missing or temporary parts as incomplete. Other files and model
-stores, provenance, remote-catalogue matching, acquisition, and mutation are
-outside this first slice.
+The version 1 inventory envelope contains a provider authority, provider/source
+status, and artifacts with an authority-scoped stable ID, source ID, logical
+relative path, observation token, observed filename, size, modification time,
+format, quantisation when it can be derived from the filename, and readiness
+state. The first format adapter is intentionally GGUF-only. It groups complete
+split GGUF sets into one artifact and reports missing or temporary parts as
+incomplete. Other files and model stores, provenance, remote-catalogue matching,
+acquisition, and mutation are outside this first slice.
 
-The minimum envelope is:
+An example envelope is:
 
 ```json
 {
   "schema_version": 1,
-  "provider": {"id": "directory", "name": "Directory inventory"},
+  "provider": {
+    "id": "inventory-example-a",
+    "name": "Directory inventory",
+    "class": "directory"
+  },
   "status": {
     "state": "ready",
     "observed_at": "2026-01-01T12:00:00Z",
@@ -83,9 +87,15 @@ The minimum envelope is:
   "artifacts": [
     {
       "id": "models:family/example-Q4_K_M.gguf:0123456789ab",
+      "source_id": "models",
+      "observation": "0123456789abcdef",
       "filename": "example-Q4_K_M.gguf",
+      "logical_path": "family/example-Q4_K_M.gguf",
       "display_location": "Local models / family / example-Q4_K_M.gguf",
       "group_path": ["family"],
+      "path_variants": [
+        {"label": "Runtime host", "value": "/srv/models/family/example-Q4_K_M.gguf"}
+      ],
       "observed": {
         "size_bytes": 4294967296,
         "modified_at": "2026-01-01T11:00:00Z",
@@ -111,11 +121,22 @@ The minimum envelope is:
 treat unknown additive fields as optional so provenance can be added later
 without making it a prerequisite for inventory.
 
-Outis never receives the provider's scan root. A root label and its relative
-GGUF path form the display location; the real filesystem path remains provider
-private. A later profile service can consume the stable
-`{provider, artifact_id}` reference and resolve it in its own filesystem
-namespace, so Windows/WSL path translation does not become Outis UI logic.
+`provider.id` is a stable authority for one configured provider instance;
+`provider.class`, when present, is only an implementation hint. An ArtifactRef
+is `{authority: provider.id, artifact_id: artifact.id}` and treats the artifact
+ID as opaque. `source_id` identifies the provider-owned source without requiring
+a client to parse the artifact ID. The stable identity remains unchanged when a
+source label changes. `observation` is separate and changes when the provider
+observes a replacement at that identity.
+
+`logical_path` is the structured, `/`-separated path used for ordinary browsing.
+`display_location` may add a source label. A provider may also publish zero or
+more `path_variants` as `{label, value}` pairs. Outis displays and copies each
+value exactly as supplied, but never parses, translates, joins, reconstructs, or
+submits it as identity. A provider that omits path variants remains fully usable.
+By default the reference provider does not expose its scan root; configuring a
+path variant is an explicit operator choice. A profile service resolves an
+ArtifactRef in its own filesystem namespace.
 
 This repository includes a small reference provider implemented with the
 Python standard library. A WSL-hosted example is:
@@ -125,6 +146,8 @@ export OUTIS_ARTIFACT_PROVIDER_TOKEN='replace-with-a-long-random-value'
 python -m artifact_store.directory_provider \
   --root models=/mnt/d/models \
   --label 'models=Local models' \
+  --provider-id inventory-example-a \
+  --path-variant 'models:Runtime host=/srv/models/{rel}' \
   --bind 0.0.0.0 \
   --port 7331
 ```
@@ -133,8 +156,11 @@ Use the same secret as `OUTIS_ARTIFACT_STORE_TOKEN` in Outis and configure the
 URL reachable from the Outis container, commonly
 `http://host.docker.internal:7331`. The provider binds to loopback by default
 and refuses a non-loopback bind unless `OUTIS_ARTIFACT_PROVIDER_TOKEN` is set.
-Multiple `--root ID=PATH` and `--label ID=LABEL` options are supported. Root IDs
-must remain stable because they participate in artifact identity; labels may be
+Multiple `--root ID=PATH`, `--label ID=LABEL`, and
+`--path-variant ROOT_ID:LABEL=TEMPLATE` options are supported. Variant templates
+may use `{path}` for the observed host path, `{root}` for the configured root,
+and `{rel}` for the logical relative path. Root IDs and provider IDs must remain
+stable because together they establish ArtifactRef identity; labels may be
 changed without changing IDs.
 
 ## Boundary scope

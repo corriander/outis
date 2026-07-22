@@ -3,7 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from artifact_store.directory_provider import DirectoryRoot, inventory_document, scan_directory_root
+from artifact_store.directory_provider import (
+    DirectoryRoot,
+    PathVariantTemplate,
+    inventory_document,
+    scan_directory_root,
+)
 
 
 def test_directory_provider_enumerates_only_gguf_paths(tmp_path):
@@ -20,8 +25,12 @@ def test_directory_provider_enumerates_only_gguf_paths(tmp_path):
     assert source == {"id": "models", "label": "Local models", "state": "ready", "artifact_count": 2}
     assert [item["filename"] for item in artifacts] == ["Nested-Q8_0.GGUF", "Root-Q4_K_M.gguf"]
     nested = artifacts[0]
+    assert nested["logical_path"] == "family/Nested-Q8_0.GGUF"
     assert nested["display_location"] == "Local models / family / Nested-Q8_0.GGUF"
     assert nested["group_path"] == ["family"]
+    assert nested["source_id"] == "models"
+    assert nested["observation"]
+    assert "path_variants" not in nested
     assert nested["observed"]["format"] == "gguf"
     assert nested["observed"]["quantization"] == "Q8_0"
     assert nested["observed"]["state"] == "ready"
@@ -71,11 +80,14 @@ def test_artifact_id_is_stable_for_the_same_provider_path(tmp_path):
     path.parent.mkdir()
     path.write_bytes(b"first")
     first, _ = scan_directory_root(DirectoryRoot("models", tmp_path, "First label"))
+    relabeled, _ = scan_directory_root(DirectoryRoot("models", tmp_path, "Renamed label"))
     path.write_bytes(b"different contents")
-    second, _ = scan_directory_root(DirectoryRoot("models", tmp_path, "Renamed label"))
+    replaced, _ = scan_directory_root(DirectoryRoot("models", tmp_path, "Renamed label"))
 
-    assert first[0]["id"] == second[0]["id"]
-    assert first[0]["display_location"] != second[0]["display_location"]
+    assert first[0]["id"] == relabeled[0]["id"] == replaced[0]["id"]
+    assert first[0]["observation"] == relabeled[0]["observation"]
+    assert first[0]["observation"] != replaced[0]["observation"]
+    assert first[0]["display_location"] != relabeled[0]["display_location"]
 
 
 def test_inventory_never_exposes_provider_scan_root(tmp_path):
@@ -85,8 +97,54 @@ def test_inventory_never_exposes_provider_scan_root(tmp_path):
     encoded = json.dumps(document)
 
     assert str(tmp_path) not in encoded
-    assert document["provider"] == {"id": "directory", "name": "Directory inventory"}
+    assert document["provider"] == {
+        "id": "directory-reference",
+        "name": "Directory inventory",
+        "class": "directory",
+    }
     assert document["status"]["state"] == "ready"
+
+
+def test_configured_path_variants_are_published_exactly_and_do_not_define_identity(tmp_path):
+    family = tmp_path / "family"
+    family.mkdir()
+    (family / "Model-Q4_K_M.gguf").write_bytes(b"gguf")
+    root = DirectoryRoot(
+        "models",
+        tmp_path,
+        "Models",
+        (
+            PathVariantTemplate("Runtime", "/srv/models/{rel}"),
+            PathVariantTemplate("Operator note", r"share://models?artifact={rel}&mode=copy"),
+        ),
+    )
+
+    artifacts, _ = scan_directory_root(root)
+
+    assert artifacts[0]["path_variants"] == [
+        {"label": "Runtime", "value": "/srv/models/family/Model-Q4_K_M.gguf"},
+        {
+            "label": "Operator note",
+            "value": "share://models?artifact=family/Model-Q4_K_M.gguf&mode=copy",
+        },
+    ]
+    assert "/srv/models" not in artifacts[0]["id"]
+
+
+def test_actual_path_variant_preserves_temporary_filename(tmp_path):
+    (tmp_path / "Model-Q4_K_M.gguf.incomplete").write_bytes(b"partial")
+    root = DirectoryRoot(
+        "models",
+        tmp_path,
+        "Models",
+        (PathVariantTemplate("Observed", "{path}"),),
+    )
+
+    artifacts, _ = scan_directory_root(root)
+
+    assert artifacts[0]["path_variants"][0]["value"].endswith(
+        "Model-Q4_K_M.gguf.incomplete"
+    )
 
 
 def test_unreachable_root_is_reported_without_raising(tmp_path):

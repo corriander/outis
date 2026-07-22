@@ -15,7 +15,7 @@ HAS_NODE = shutil.which("node") is not None
 
 def _run(expression: str):
     script = (
-        f"import {{ artifactDisplayLabels, formatArtifactBytes, filterInventoryArtifacts, sortInventoryArtifacts }} from '{MODULE.as_uri()}';"
+        f"import {{ artifactDisplayLabels, artifactPathVariantValue, artifactPathVariantsHtml, formatArtifactBytes, filterInventoryArtifacts, sortInventoryArtifacts }} from '{MODULE.as_uri()}';"
         f"console.log(JSON.stringify({expression}));"
     )
     proc = subprocess.run(
@@ -116,3 +116,35 @@ def test_inventory_primary_label_follows_the_selected_sort():
         "group_path": [],
     })
     assert _run(f"artifactDisplayLabels({root_artifact}, 'path')")["primary"] == "Root-Q6_K.gguf"
+
+
+@pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
+def test_logical_path_is_primary_and_preserves_arbitrary_nested_hierarchy():
+    artifact = {
+        "filename": "Model-Q4_K_M.gguf",
+        "logical_path": "publisher/family/variant/Model-Q4_K_M.gguf",
+        "display_location": "Inventory A / publisher / family / variant / Model-Q4_K_M.gguf",
+        "group_path": ["stale", "fallback"],
+    }
+
+    assert _run(f"artifactDisplayLabels({json.dumps(artifact)}, 'path')")["primary"] == (
+        "publisher / family / variant / Model-Q4_K_M.gguf"
+    )
+
+
+@pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
+def test_path_variant_value_is_not_parsed_or_translated():
+    value = r"\\host\share\models\family\Model-Q4_K_M.gguf?raw=a&b=<c>"
+    artifact = {"path_variants": [{"label": "Exact", "value": value}]}
+    encoded = json.dumps(artifact)
+
+    assert _run(f"artifactPathVariantValue({encoded}, 0)") == value
+    html = _run(f"artifactPathVariantsHtml({encoded})")
+    assert "Exact" in html
+    assert "&amp;" in html
+    assert "&lt;c&gt;" in html
+
+
+@pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
+def test_missing_path_variants_render_no_extra_detail():
+    assert _run("artifactPathVariantsHtml({id:'artifact-only'})") == ""
