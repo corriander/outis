@@ -75,6 +75,38 @@ def test_temporary_gguf_is_visible_but_not_ready(tmp_path):
     assert artifacts[0]["observed"]["state"] == "incomplete"
 
 
+def test_completed_monolithic_gguf_supersedes_stale_temporary_file(tmp_path):
+    (tmp_path / "Model-Q4_K_M.gguf").write_bytes(b"complete")
+    (tmp_path / "Model-Q4_K_M.gguf.incomplete").write_bytes(b"stale")
+    root = DirectoryRoot(
+        "models",
+        tmp_path,
+        "Models",
+        (PathVariantTemplate("Observed", "{path}"),),
+    )
+
+    artifacts, source = scan_directory_root(root)
+
+    assert len(artifacts) == 1
+    assert source["artifact_count"] == 1
+    assert artifacts[0]["filename"] == "Model-Q4_K_M.gguf"
+    assert artifacts[0]["observed"]["state"] == "ready"
+    assert artifacts[0]["observed"]["size_bytes"] == len(b"complete")
+    assert [item["filename"] for item in artifacts[0]["files"]] == ["Model-Q4_K_M.gguf"]
+    assert artifacts[0]["path_variants"][0]["value"].endswith("Model-Q4_K_M.gguf")
+
+
+def test_multiple_temporary_suffixes_collapse_to_one_monolithic_artifact(tmp_path):
+    (tmp_path / "Model-Q5_K_M.gguf.part").write_bytes(b"part")
+    (tmp_path / "Model-Q5_K_M.gguf.incomplete").write_bytes(b"incomplete")
+
+    artifacts, source = scan_directory_root(DirectoryRoot("models", tmp_path, "Models"))
+
+    assert len(artifacts) == 1
+    assert source["artifact_count"] == 1
+    assert artifacts[0]["observed"]["state"] == "incomplete"
+
+
 def test_artifact_id_is_stable_for_the_same_provider_path(tmp_path):
     path = tmp_path / "family" / "Model-Q5_K_M.gguf"
     path.parent.mkdir()
@@ -90,7 +122,7 @@ def test_artifact_id_is_stable_for_the_same_provider_path(tmp_path):
     assert first[0]["display_location"] != relabeled[0]["display_location"]
 
 
-def test_inventory_never_exposes_provider_scan_root(tmp_path):
+def test_programmatic_inventory_retains_legacy_authority_without_exposing_scan_root(tmp_path):
     (tmp_path / "Model-Q4_K_M.gguf").write_bytes(b"gguf")
 
     document = inventory_document([DirectoryRoot("models", tmp_path, "Local models")])
@@ -98,7 +130,7 @@ def test_inventory_never_exposes_provider_scan_root(tmp_path):
 
     assert str(tmp_path) not in encoded
     assert document["provider"] == {
-        "id": "directory-reference",
+        "id": "directory",
         "name": "Directory inventory",
         "class": "directory",
     }
@@ -161,3 +193,13 @@ def test_unreachable_root_is_reported_without_raising(tmp_path):
 def test_root_ids_are_restricted(root_id, tmp_path):
     with pytest.raises(ValueError):
         DirectoryRoot(root_id, Path(tmp_path), "Models")
+
+
+def test_live_cli_requires_explicit_provider_authority(tmp_path, capsys):
+    from artifact_store.directory_provider import main
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--root", f"models={tmp_path}"])
+
+    assert exc_info.value.code == 2
+    assert "--provider-id" in capsys.readouterr().err

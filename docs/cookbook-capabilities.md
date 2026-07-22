@@ -163,6 +163,12 @@ and `{rel}` for the logical relative path. Root IDs and provider IDs must remain
 stable because together they establish ArtifactRef identity; labels may be
 changed without changing IDs.
 
+The command-line provider deliberately has no default authority:
+`--provider-id` is required so two independently configured instances cannot
+silently publish the same ArtifactRef namespace. Direct Python callers of
+`inventory_document()` retain the historical `directory` default for source
+compatibility only; network providers must not rely on it.
+
 ## Boundary scope
 
 This policy governs Cookbook-specific HTTP routes, frontend controls, and agent

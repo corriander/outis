@@ -23,7 +23,9 @@ from urllib.parse import quote, urlsplit
 
 
 SCHEMA_VERSION = 1
-DEFAULT_PROVIDER_ID = "directory-reference"
+# Compatibility default for direct Python callers of ``inventory_document``.
+# The network-facing CLI requires an explicit instance authority instead.
+LEGACY_PROGRAMMATIC_PROVIDER_ID = "directory"
 DEFAULT_PROVIDER_NAME = "Directory inventory"
 PROVIDER_CLASS = "directory"
 _ROOT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -275,15 +277,27 @@ def scan_directory_root(root: DirectoryRoot) -> tuple[list[dict], dict]:
         source.update({"state": "partial", "error": "one or more directories could not be read"})
 
     split_groups: dict[tuple[str, str, int], list[tuple[int, _ObservedFile]]] = {}
-    ordinary: list[_ObservedFile] = []
+    ordinary_groups: dict[str, list[_ObservedFile]] = {}
     for item in observed_files:
         match = _SPLIT_GGUF_RE.match(item.intended_filename)
         if not match:
-            ordinary.append(item)
+            ordinary_groups.setdefault(item.relative_path, []).append(item)
             continue
         parent = Path(item.relative_path).parent.as_posix()
         key = (parent, match.group("prefix"), int(match.group("total")))
         split_groups.setdefault(key, []).append((int(match.group("part")), item))
+
+    ordinary: list[_ObservedFile] = []
+    for candidates in ordinary_groups.values():
+        completed = [item for item in candidates if not item.temporary]
+        if completed:
+            # Only one completed file can occupy a filesystem path. Prefer it
+            # over any stale download marker for the same intended GGUF.
+            ordinary.append(completed[0])
+            continue
+        # Multiple temporary suffixes can coexist. Keep one logical artifact
+        # and use the newest observation, with filename as a stable tie-break.
+        ordinary.append(max(candidates, key=lambda item: (item.modified_at, item.filename)))
 
     artifacts = [
         _artifact(
@@ -334,7 +348,7 @@ def scan_directory_root(root: DirectoryRoot) -> tuple[list[dict], dict]:
 def inventory_document(
     roots: Iterable[DirectoryRoot],
     *,
-    provider_id: str = DEFAULT_PROVIDER_ID,
+    provider_id: str = LEGACY_PROGRAMMATIC_PROVIDER_ID,
     provider_name: str = DEFAULT_PROVIDER_NAME,
     provider_class: str | None = PROVIDER_CLASS,
 ) -> dict:
@@ -494,11 +508,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=7331)
     parser.add_argument(
         "--provider-id",
-        default=DEFAULT_PROVIDER_ID,
+        required=True,
         help=(
-            "Provider authority ID (opaque to clients). Operators SHOULD "
-            "override with a stable instance-scoped identifier when running "
-            "more than one provider."
+            "Stable instance authority for ArtifactRefs (opaque to clients)."
         ),
     )
     parser.add_argument("--provider-name", default=DEFAULT_PROVIDER_NAME)
