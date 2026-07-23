@@ -1,9 +1,9 @@
 # routes/personal_routes.py
 """Routes for personal documents management."""
+import asyncio
 import os
 import logging
 import shutil
-import threading
 import uuid
 from typing import Any, Dict, List, Tuple
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File, Depends
@@ -19,14 +19,6 @@ from src.upload_limits import PERSONAL_UPLOAD_MAX_BYTES
 UPLOADS_DIR = PERSONAL_UPLOADS_DIR
 
 logger = logging.getLogger(__name__)
-
-# Serializes directory index jobs across requests. Now that indexing runs in
-# the threadpool (#5558), concurrent requests would otherwise run in parallel
-# and race PersonalDocsManager's unsynchronized list mutations and file
-# writes; before the threadpool move they serialized on the blocked event
-# loop, so one-at-a-time is behavior parity.
-_index_job_lock = threading.Lock()
-
 
 def _personal_upload_dir_for_owner(owner: str | None, *, create: bool = True) -> str:
     """Return the per-owner upload directory used for direct RAG uploads."""
@@ -150,6 +142,22 @@ def setup_personal_routes(personal_docs_manager, rag_manager, rag_available):
     """
     router = APIRouter(prefix="/api/personal")
 
+    # Serializes directory index jobs across requests. Indexing runs in the
+    # threadpool (#5558), so concurrent requests would otherwise run in parallel
+    # and race PersonalDocsManager's unsynchronized list mutations and file
+    # writes; before the threadpool move they serialized on the blocked event
+    # loop, so one-at-a-time is behavior parity.
+    #
+    # An asyncio.Lock acquired in the async handler BEFORE offloading: a waiting
+    # request parks on the event loop instead of pinning a threadpool worker (an
+    # earlier threading.Lock taken INSIDE the worker meant queued jobs held pool
+    # tokens while blocked, starving every other run_in_threadpool caller).
+    # add/remove/reload all take this lock, so their mutations never interleave.
+    # Per-router (not module-global) so each app binds it to its own event loop.
+    # Scope is the single process: multi-worker deployments would need a shared
+    # lock (out of scope for #5558).
+    _index_job_lock = asyncio.Lock()
+
     def _rag():
         """Get the current RAG manager, retrying init if needed."""
         return get_rag_manager()
@@ -181,8 +189,12 @@ def setup_personal_routes(personal_docs_manager, rag_manager, rag_available):
         return {"files": files, "directories": directories}
     
     @router.post("/reload")
-    def api_personal_reload(owner: str = Depends(require_user), _admin: None = Depends(require_admin)):
-        personal_docs_manager.refresh_index()
+    async def api_personal_reload(owner: str = Depends(require_user), _admin: None = Depends(require_admin)):
+        # refresh_index() re-extracts text across every tracked directory —
+        # blocking work. Take the shared job lock (so it cannot race an add /
+        # remove) and run it off the event loop.
+        async with _index_job_lock:
+            await run_in_threadpool(personal_docs_manager.refresh_index)
         return {"ok": True, "count": len(personal_docs_manager.index)}
     
     @router.post("/add_directory")
@@ -217,21 +229,23 @@ def setup_personal_routes(personal_docs_manager, rag_manager, rag_available):
             rag = _rag()
             if rag:
                 def _index_directory():
-                    with _index_job_lock:
-                        result = rag.index_personal_documents(directory, owner=owner)
-                        if result["success"]:
-                            # Also update the personal_docs_manager to track
-                            # this directory. Kept inside the threadpool call:
-                            # it triggers refresh_index(), which re-extracts
-                            # text across tracked directories.
-                            personal_docs_manager.add_directory(directory, index=False)
-                        return result
+                    result = rag.index_personal_documents(directory, owner=owner)
+                    if result["success"]:
+                        # Also update the personal_docs_manager to track this
+                        # directory. Kept inside the offloaded call: it triggers
+                        # refresh_index(), which re-extracts text across tracked
+                        # directories.
+                        personal_docs_manager.add_directory(directory, index=False)
+                    return result
 
                 # Indexing walks, embeds, and stores the whole tree — minutes
                 # on a real directory. The handler is async, so calling it
                 # inline runs it on the event loop and every other request
-                # queues behind it until it finishes (#5558).
-                result = await run_in_threadpool(_index_directory)
+                # queues behind it until it finishes (#5558). Serialize on the
+                # async job lock BEFORE offloading so a queued request parks on
+                # the loop instead of pinning a threadpool worker.
+                async with _index_job_lock:
+                    result = await run_in_threadpool(_index_directory)
 
                 if result["success"]:
                     return {
@@ -272,17 +286,25 @@ def setup_personal_routes(personal_docs_manager, rag_manager, rag_available):
 
             logger.info(f"Removing directory from RAG: {directory}")
 
-            # Always remove from personal_docs_manager tracking
-            if hasattr(personal_docs_manager, 'remove_directory'):
-                personal_docs_manager.remove_directory(directory)
-
-            # Remove from RAG vector store (best-effort)
             rag = _rag()
-            if rag:
-                try:
-                    rag.remove_directory(directory)
-                except Exception as e:
-                    logger.warning(f"RAG removal failed for directory {directory}: {e}")
+
+            def _remove_directory():
+                # Always remove from personal_docs_manager tracking. This
+                # mutates the same unsynchronized list/index an add job touches
+                # and re-extracts text (refresh_index), so it is blocking work.
+                if hasattr(personal_docs_manager, 'remove_directory'):
+                    personal_docs_manager.remove_directory(directory)
+                # Remove from RAG vector store (best-effort).
+                if rag:
+                    try:
+                        rag.remove_directory(directory)
+                    except Exception as e:
+                        logger.warning(f"RAG removal failed for directory {directory}: {e}")
+
+            # Same job lock as add/reload so remove cannot interleave with an
+            # in-flight add; offloaded off the event loop.
+            async with _index_job_lock:
+                await run_in_threadpool(_remove_directory)
 
             return {
                 "success": True,
