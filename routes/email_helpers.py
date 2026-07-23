@@ -246,6 +246,7 @@ import re as _re_reply
 # serves replies and summaries (any fenced final-output block).
 _REPLY_OPEN_RE = _re_reply.compile(r"<<<\s*(?:REPLY|SUMMARY|OUTPUT)\s*>>+", _re_reply.I)
 _REPLY_CLOSE_RE = _re_reply.compile(r"<<<\s*END\s*>>+", _re_reply.I)
+_REPLY_ROLE_MARKER_RE = _re_reply.compile(r"</?\|(?:assistant|assistan|user|system|tool)\|>?|</\|end\|>?", _re_reply.I)
 
 
 def _extract_reply(text: str) -> str:
@@ -272,6 +273,7 @@ def _extract_reply(text: str) -> str:
     # Drop any stray/duplicate marker tokens, then strip think markup.
     t = _REPLY_OPEN_RE.sub("", t)
     t = _REPLY_CLOSE_RE.sub("", t)
+    t = _REPLY_ROLE_MARKER_RE.sub("", t)
     return _strip_think(t).strip()
 
 
