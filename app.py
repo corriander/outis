@@ -761,7 +761,7 @@ app.include_router(setup_cookbook_routes())
 from routes.artifact_routes import setup_artifact_routes
 app.include_router(setup_artifact_routes())
 
-# Provider-backed external ProfileService (same-origin proxy; WS-05B editor)
+# Provider-backed external ProfileService (same-origin proxy for the profile editor)
 from routes.profile_service_routes import setup_profile_service_routes
 app.include_router(setup_profile_service_routes())
 
