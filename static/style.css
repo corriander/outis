@@ -518,6 +518,31 @@ body.bg-pattern-sparkles {
       min-height: 48px;
     }
 
+    .outis-source-offer {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      padding: 4px 12px 0;
+      color: var(--fg);
+      font-size: 9px;
+      opacity: 0.4;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .outis-source-offer a {
+      color: inherit;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
+    .outis-source-offer a:hover,
+    .outis-source-offer a:focus-visible {
+      color: var(--accent, var(--red));
+      opacity: 1;
+    }
+
     .user-bar-left {
       display: flex;
       align-items: center;
@@ -587,6 +612,10 @@ body.bg-pattern-sparkles {
 
 
     .sidebar.hidden .sidebar-user-bar {
+      display: none;
+    }
+
+    .sidebar.hidden .outis-source-offer {
       display: none;
     }
 
@@ -23486,10 +23515,35 @@ body.gallery-selecting .gallery-dl-btn,
   font-size: 9px; color: var(--fg-muted);
 }
 .hwfit-fit { width: 52px; font-weight: 700; text-transform: uppercase; }
+/* Name cell is a flex row: the text span truncates, the badges (MoE/IMG/HF+/
+   link/downloaded-dot) never do. Previously the whole cell ellipsis-clipped,
+   so on long repo names the HF+ badge — and its provenance tooltip — vanished. */
 .hwfit-name {
-  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  flex: 1; min-width: 0; overflow: hidden;
+  display: flex; align-items: center;
   font-weight: 500; font-size: 11px; color: var(--fg);
 }
+.hwfit-name > * { flex-shrink: 0; }
+.hwfit-name .hwfit-name-text {
+  flex-shrink: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Low-engagement search rows (few downloads/likes): same treatment as
+   already-downloaded rows — dimmed but recoverable on hover. */
+.hwfit-row-lowdl { opacity: 0.5; }
+.hwfit-row-lowdl:hover { opacity: 0.9; }
+/* Author-prefix toggle (Extended mode, end of the filter row). The toolbar
+   rules above only style select/input, so the button needs its own box to
+   line up with its 28px siblings. Dims when toggled off. */
+.hwfit-toolbar .hwfit-author-toggle {
+  height: 28px; padding: 0 8px; font-size: 10px; flex-shrink: 0;
+  margin: 0; /* a global button rule adds margin-top and knocks it off-row */
+  background: var(--bg); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 4px;
+  cursor: pointer; box-sizing: border-box; font-family: inherit;
+}
+.hwfit-toolbar .hwfit-author-toggle:hover { border-color: var(--red); }
+.hwfit-author-toggle[aria-pressed="false"] { opacity: 0.45; }
 .hwfit-c-params { width: 42px; }
 .hwfit-c-quant  { width: 52px; }
 .hwfit-c-vram   { width: 42px; }

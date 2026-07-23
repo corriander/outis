@@ -4,11 +4,19 @@ This page keeps the detailed install, deployment, troubleshooting, and configura
 
 ## Quick Start
 
-> **Branch note:** `dev` is the default branch and contains the latest development changes, but it may be unstable. For the more stable curated branch, use [`main`](https://github.com/odysseus-dev/odysseus/tree/main).
+> **Fork note:** `main` is Outis' default product branch. Outis selectively
+> tracks stable [Odysseus](https://github.com/odysseus-dev/odysseus) releases;
+> see [the fork policy](../FORK.md).
 
 Defaults work out of the box: clone, run, then configure models/search/email
 inside **Settings**. Only edit `.env` for deployment-level overrides like
 `APP_BIND`, `APP_PORT`, `AUTH_ENABLED`, `DATABASE_URL`, or a pre-seeded admin password.
+
+> **Cookbook mode:** Outis defaults to the full inherited Cookbook
+> (`OUTIS_COOKBOOK_MODE=native`), with broad Hugging Face search merged into
+> the model browser. `external` declares a provider-owned deployment and is
+> catalogue-only until such providers exist. See the
+> [Cookbook capability boundary](cookbook-capabilities.md).
 
 On first setup, Odysseus creates an admin account (`admin` unless
 `ODYSSEUS_ADMIN_USER` is set) and prints a temporary password in the terminal.
@@ -20,8 +28,8 @@ pull request guidelines.
 
 ### Docker (recommended)
 ```bash
-git clone https://github.com/odysseus-dev/odysseus.git
-cd odysseus
+git clone https://github.com/corriander/outis.git
+cd outis
 cp .env.example .env       # optional, but recommended for explicit defaults
 docker compose up -d --build
 ```
@@ -38,8 +46,8 @@ only when you intentionally want LAN/reverse-proxy access.
 
 ### Native Linux / macOS
 ```bash
-git clone https://github.com/odysseus-dev/odysseus.git
-cd odysseus
+git clone https://github.com/corriander/outis.git
+cd outis
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
@@ -56,8 +64,8 @@ Docker on macOS cannot use the Metal GPU. For GPU-accelerated Cookbook on an
 M-series Mac, run Odysseus natively:
 
 ```bash
-git clone https://github.com/odysseus-dev/odysseus.git
-cd odysseus
+git clone https://github.com/corriander/outis.git
+cd outis
 ./start-macos.sh
 ```
 
@@ -330,16 +338,16 @@ do not run on macOS. MLX-only models are not served by Odysseus.
 server; safe to re-run):
 
 ```powershell
-git clone https://github.com/odysseus-dev/odysseus.git
-cd odysseus
+git clone https://github.com/corriander/outis.git
+cd outis
 powershell -ExecutionPolicy Bypass -File .\launch-windows.ps1
 ```
 
 Or do it by hand:
 
 ```powershell
-git clone https://github.com/odysseus-dev/odysseus.git
-cd odysseus
+git clone https://github.com/corriander/outis.git
+cd outis
 py -3.11 -m venv venv
 venv\Scripts\Activate.ps1
 pip install -r requirements.txt

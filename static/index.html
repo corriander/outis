@@ -948,6 +948,7 @@
         </div>
       </div>
     </div>
+    <div class="outis-source-offer" id="outis-source-offer" aria-label="Outis source and license" hidden></div>
     <div class="sidebar-user-bar" id="sidebar-user-bar">
       <div class="user-bar-left" id="user-bar-profile">
         <div class="user-bar-avatar" id="user-bar-avatar"></div>
@@ -1009,6 +1010,34 @@
       }
       fetch('/api/version').then(function(r){return r.json()}).then(function(d){
         if (d.version) window._appVersion = d.version;
+        var offer = document.getElementById('outis-source-offer');
+        if (!offer || !d.source_url || !d.license_url) return;
+        var sourceUrl;
+        var licenseUrl;
+        try {
+          sourceUrl = new URL(d.source_url, window.location.href);
+          licenseUrl = new URL(d.license_url, window.location.href);
+          if (!/^https?:$/.test(sourceUrl.protocol) || !/^https?:$/.test(licenseUrl.protocol)) return;
+        } catch (_) { return; }
+        offer.replaceChildren();
+        var label = document.createElement('span');
+        label.textContent = (d.project || 'Outis') + (d.version ? ' v' + d.version : '') +
+          (d.build_ref ? '@' + String(d.build_ref).slice(0, 12) : '');
+        if (d.build_ref) label.title = 'Build ' + d.build_ref;
+        offer.append(label, document.createTextNode('·'));
+        var sourceLink = document.createElement('a');
+        sourceLink.href = sourceUrl.href;
+        sourceLink.textContent = 'Source';
+        sourceLink.target = '_blank';
+        sourceLink.rel = 'noopener noreferrer';
+        offer.append(sourceLink, document.createTextNode('·'));
+        var licenseLink = document.createElement('a');
+        licenseLink.href = licenseUrl.href;
+        licenseLink.textContent = d.license || 'AGPL-3.0-or-later';
+        licenseLink.target = '_blank';
+        licenseLink.rel = 'noopener noreferrer';
+        offer.append(licenseLink);
+        offer.hidden = false;
       }).catch(function(){});
     })();
     </script>

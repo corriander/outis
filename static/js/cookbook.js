@@ -35,6 +35,10 @@ import {
 
 import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
 import { topPortalZ } from './toolWindowZOrder.js';
+import {
+  currentCookbookUiPolicy,
+  loadCookbookCapabilities,
+} from './cookbookCapabilities.js';
 
 const STORAGE_KEY = 'cookbook-presets';
 const LAST_STATE_KEY = 'cookbook-last-state';
@@ -3100,7 +3104,8 @@ function _renderRecipes() {
   html += '<select class="cookbook-field-input hwfit-usecase" id="hwfit-usecase" style="display:none;height:28px;">';
   html += '<option value="general" selected>Standard</option>';
   html += '<option value="multimodal">Vision</option>';
-  html += '<option value="image_gen">Image</option></select>';
+  html += '<option value="image_gen">Image</option>';
+  html += '<option value="extended" title="Standard search plus broad Hugging Face discovery — search-sourced rows are fit-ranked from name heuristics and tagged HF+">Extended</option></select>';
   html += '<button type="button" class="cookbook-field-input hwfit-usecase-btn" data-hwfit-usecase-btn aria-haspopup="listbox" aria-expanded="false" title="Model type">';
   html += '<span class="hwfit-usecase-btn-icon" data-hwfit-usecase-icon aria-hidden="true"></span>';
   html += '<span class="hwfit-usecase-btn-label" data-hwfit-usecase-label>Standard</span>';
@@ -3156,10 +3161,19 @@ function _renderRecipes() {
   html += '<label class="hwfit-ctx-control" title="Context length for fit estimates. Lower it to find more models that could fit your hardware.">';
   html += '<span>Context</span><span class="hwfit-help-chip hwfit-help-chip-inline" title="Context length. Lower it to find more models that could fit your hardware; raise it when you need longer chats or documents.">?</span><input type="range" id="hwfit-context" min="0" max="5" step="1" value="3" />';
   html += '<output id="hwfit-context-label">50k</output></label>';
+  // Author-prefix toggle for search-sourced (HF+) rows — end of the filter
+  // row, only meaningful in Extended mode so it stays hidden for
+  // Standard/Vision. Wiring in cookbook-hwfit.js:_hwfitInit.
+  html += '<button type="button" class="hwfit-author-toggle" id="hwfit-author-toggle" hidden aria-pressed="true" title="Show or hide the author/org prefix on search-sourced rows">Author</button>';
   html += '</div>';
   html += '<div class="hwfit-manual-panel hidden" id="hwfit-manual-panel">';
   html += '<span class="hwfit-manual-note" style="font-size:10px;opacity:0.6;width:100%;margin-bottom:2px;">Simulator — these values REPLACE detected hardware.</span>';
   html += '<select class="hwfit-manual-mode"><option value="gpu">GPU</option><option value="ram">RAM</option></select>';
+  // Optional GPU model: matched against the speed model's bandwidth table
+  // ("7900 XTX", "4090", "MI300X"…). Without it a simulated GPU has no
+  // bandwidth entry and speed estimates fall back to crude per-backend
+  // constants — badly pessimistic for big dense models.
+  html += '<label>GPU model<input class="hwfit-manual-gpu-name" type="text" placeholder="e.g. 7900 XTX (optional)"></label>';
   html += '<label>GPUs<input class="hwfit-manual-gpus" type="text" inputmode="numeric" placeholder="1"></label>';
   html += '<label>VRAM per GPU<input class="hwfit-manual-vram" type="text" inputmode="decimal" placeholder="8 GB"></label>';
   html += '<label>Total RAM<input class="hwfit-manual-ram" type="text" inputmode="decimal" placeholder="32 GB"></label>';
@@ -3363,6 +3377,7 @@ export async function open(opts) {
   }
   _setCookbookOpening(true);
   try {
+  await loadCookbookCapabilities();
   // Invalidate any pending close() animation handlers so they won't re-hide us
   _closeGen++;
   // Clear any leftover inline styles from a previous swipe-dismiss or close animation
@@ -3382,7 +3397,8 @@ export async function open(opts) {
     restoreFn: () => { _renderRunningTab(); },
   });
   _wireCookbookDrag(modal);
-  await _syncFromServer();
+  const cookbookPolicy = currentCookbookUiPolicy();
+  if (cookbookPolicy.nativeSettings) await _syncFromServer();
   // `_syncFromServer` lives in cookbookRunning.js and populates *its* _envState
   // (a different object reference than this module's), then mirrors the merged
   // state to localStorage. So ALWAYS hydrate our _envState from that mirror —
@@ -3413,12 +3429,17 @@ export async function open(opts) {
   try { _renderRecipes(); } catch (e) { console.error('[cookbook] renderRecipes failed', e); }
   _rendered = true;
   _clearCookbookNotif();
-  try { _renderRunningTab(); } catch (e) { console.error('[cookbook] renderRunningTab failed', e); }
+  if (cookbookPolicy.launch || cookbookPolicy.download) {
+    try { _renderRunningTab(); } catch (e) { console.error('[cookbook] renderRunningTab failed', e); }
+    try { _startBackgroundMonitor(); } catch (e) { console.error('[cookbook] background monitor failed', e); }
+  }
   // Self-heal: revive any download tasks whose tmux session is still alive
   // but were persisted as done/error (covers the "restarted server while a
   // big multi-shard download was in flight" case — the task survived in
   // tmux, the cookbook just lost track of it).
-  try { _selfHealStaleTasks({ oneShot: true }); } catch {}
+  if (cookbookPolicy.launch || cookbookPolicy.download) {
+    try { _selfHealStaleTasks({ oneShot: true }); } catch {}
+  }
   if (_content) {
     // Put the panel in its entering state before it becomes visible. On
     // mobile, showing first and adding the class a frame later can paint the
@@ -3532,6 +3553,7 @@ function _claimSharedStateLeader() {
 }
 
 function _canRefreshSharedCookbookState() {
+  if (!currentCookbookUiPolicy().nativeSettings) return false;
   if (!isVisible() || _sharedSyncInFlight) return false;
   if (document.visibilityState !== 'visible') return false;
   if (_foregroundChatBusy()) return false;

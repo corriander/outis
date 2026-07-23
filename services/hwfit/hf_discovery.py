@@ -176,14 +176,34 @@ def _quant_bytes_per_param(quant):
     }.get(quant, 2.2)
 
 
+# Pipelines whose models genuinely have small/no text context (speech, image
+# and video generation, classification). Deliberately does NOT include
+# "image-text-to-text" / "video-text-to-text": those are vision-language chat
+# models — ordinary long-context LLMs with eyes.
+_SHORT_CONTEXT_PIPELINES = {
+    "automatic-speech-recognition", "text-to-speech", "audio-to-audio",
+    "audio-classification", "text-to-audio",
+    "text-to-image", "image-to-image", "image-classification", "image-to-text",
+    "text-to-video", "image-to-video", "video-classification",
+}
+
+
 def _infer_context(repo_id, pipeline_tag):
-    text = f"{repo_id or ''} {pipeline_tag or ''}".lower()
-    if any(k in text for k in ("whisper", "asr", "speech-recognition", "tts", "audio", "image", "video", "diffusion")):
+    name = (repo_id or "").lower()
+    pipeline = (pipeline_tag or "").strip().lower()
+    # Name keywords keep substring semantics; the pipeline tag gets an EXACT
+    # match against known short-context pipelines. The old substring check
+    # ("image" in text) caught pipeline "image-text-to-text", clamping every
+    # properly-tagged VLM repo to 4k while identical repos with MISSING
+    # metadata got the 32k default — a metadata-completeness inversion that
+    # made adjacent rows of the same model disagree on ctx/VRAM/fit.
+    if any(k in name for k in ("whisper", "asr", "speech-recognition", "tts", "audio", "image", "video", "diffusion")):
         return 4096
+    if pipeline in _SHORT_CONTEXT_PIPELINES:
+        return 4096
+    text = f"{name} {pipeline}"
     if any(k in text for k in ("glm-5.2", "deepseek-v4", "minimax-m3")):
         return 1_000_000
-    if any(k in text for k in ("qwen3", "glm", "deepseek", "minimax")):
-        return 32768
     return 32768
 
 
@@ -202,25 +222,20 @@ def _infer_use_case(repo_id, pipeline_tag):
     return "general"
 
 
-def _entry_from_collection_item(collection, item, source):
-    repo_id = item.get("id") or ""
-    if item.get("type") != "model" or not repo_id:
-        return None
-    repo_prefix = source.get("repo_prefix")
-    if repo_prefix and not repo_id.startswith(repo_prefix):
-        return None
-    raw_params = item.get("numParameters") or 0
-    active = None
-    if not raw_params:
-        raw_params, active = _parse_params_from_name(repo_id)
+def _assemble_entry(repo_id, source, raw_params, active, pipeline_tag, downloads, likes, last_modified):
+    """Shared catalogue-entry assembly for every name-heuristic source.
+
+    Both the whitelisted-collection path and the broad-search path go through
+    here so estimates (quant, RAM, context, use case) can never fork: a search
+    hit is a candidate catalogue entry that hasn't been enriched yet (#11),
+    not a different species.
+    """
     param_label, raw_params = _format_params(raw_params)
     if not raw_params:
         return None
 
     quant = _infer_quant(repo_id, source)
-    pipeline_tag = item.get("pipeline_tag") or ""
     min_ram = round((raw_params / 1_000_000_000) * _quant_bytes_per_param(quant) + 0.8, 1)
-    last_modified = item.get("lastModified") or collection.get("lastUpdated") or ""
     release_date = ""
     if last_modified:
         try:
@@ -242,15 +257,11 @@ def _entry_from_collection_item(collection, item, source):
         "capabilities": ["mlx"] if source.get("mlx_only") else ["vllm", "sglang"],
         "pipeline_tag": pipeline_tag,
         "architecture": "",
-        "hf_downloads": int(item.get("downloads") or 0),
-        "hf_likes": int(item.get("likes") or 0),
+        "hf_downloads": int(downloads or 0),
+        "hf_likes": int(likes or 0),
         "release_date": release_date,
         "format": "mlx" if source.get("mlx_only") else "safetensors",
-        "collection": collection.get("title") or "",
-        "description": collection.get("description") or "",
         "_discovered": True,
-        "_source": "hf_collections",
-        "_source_owner": source.get("owner") or "",
     }
     if source.get("mlx_only"):
         entry["mlx_only"] = True
@@ -261,6 +272,72 @@ def _entry_from_collection_item(collection, item, source):
     if active:
         entry["is_moe"] = True
         entry["active_parameters"] = active
+    return entry
+
+
+def _entry_from_collection_item(collection, item, source):
+    repo_id = item.get("id") or ""
+    if item.get("type") != "model" or not repo_id:
+        return None
+    repo_prefix = source.get("repo_prefix")
+    if repo_prefix and not repo_id.startswith(repo_prefix):
+        return None
+    raw_params = item.get("numParameters") or 0
+    active = None
+    if not raw_params:
+        raw_params, active = _parse_params_from_name(repo_id)
+    entry = _assemble_entry(
+        repo_id,
+        source,
+        raw_params,
+        active,
+        item.get("pipeline_tag") or "",
+        item.get("downloads"),
+        item.get("likes"),
+        item.get("lastModified") or collection.get("lastUpdated") or "",
+    )
+    if entry is None:
+        return None
+    entry["collection"] = collection.get("title") or ""
+    entry["description"] = collection.get("description") or ""
+    entry["_source"] = "hf_collections"
+    entry["_source_owner"] = source.get("owner") or ""
+    return entry
+
+
+def entry_from_search_hit(hit):
+    """Build a catalogue-style entry from a broad-search hit.
+
+    `hit` is the normalised shape `services.hwfit.hf_search` returns. Params
+    prefer the Hub's safetensors-declared count when the search response
+    carried one, else the same name parse the collection path uses. Returns
+    None when no parameter count can be inferred — the caller keeps the raw
+    hit as an unassessed row rather than inventing an estimate.
+    """
+    repo_id = str(hit.get("repo_id") or hit.get("name") or "").strip()
+    if not repo_id:
+        return None
+    source = {"mlx_only": True} if repo_id.startswith("mlx-community/") else {}
+    raw_params = hit.get("params") or 0
+    active = None
+    if not raw_params:
+        raw_params, active = _parse_params_from_name(repo_id)
+    entry = _assemble_entry(
+        repo_id,
+        source,
+        raw_params,
+        active,
+        hit.get("pipeline_tag") or "",
+        hit.get("downloads"),
+        hit.get("likes"),
+        hit.get("last_modified") or hit.get("created_at") or "",
+    )
+    if entry is None:
+        return None
+    author = str(hit.get("author") or "").strip()
+    if author:
+        entry["provider"] = author
+    entry["_source"] = "hf_search"
     return entry
 
 

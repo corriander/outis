@@ -925,8 +925,9 @@ async def serve_login(request: Request):
 
 @app.get("/api/version")
 async def get_version():
-    from core.constants import APP_VERSION
-    return {"version": APP_VERSION}
+    from src.project_info import project_metadata
+
+    return project_metadata()
 
 @app.get("/api/health")
 async def health_check() -> Dict[str, str]:
@@ -1241,8 +1242,11 @@ async def _startup_event():
     # something with end_after_min set. Removing this line + the
     # cookbook_serve entry in BUILTIN_ACTIONS + src/cookbook_serve_lifecycle.py
     # removes the feature.
-    from src.cookbook_serve_lifecycle import cookbook_serve_lifecycle_loop
-    _startup_tasks.append(asyncio.create_task(cookbook_serve_lifecycle_loop()))
+    from src.cookbook_capabilities import cookbook_capabilities
+    cookbook_runtime = cookbook_capabilities()["capabilities"]["runtime_controller"]
+    if cookbook_runtime["stop"]:
+        from src.cookbook_serve_lifecycle import cookbook_serve_lifecycle_loop
+        _startup_tasks.append(asyncio.create_task(cookbook_serve_lifecycle_loop()))
 
     logger.info("Application startup complete")
 

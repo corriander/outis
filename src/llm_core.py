@@ -11,6 +11,7 @@ import os
 from contextlib import asynccontextmanager
 from fastapi import HTTPException
 from typing import Optional, Dict, List, Tuple
+from src.constants import DEFAULT_OUTIS_SOURCE_URL, OUTIS_PROJECT_NAME
 from src.model_context import get_context_length, DEFAULT_CONTEXT, is_local_endpoint
 from urllib.parse import urlparse
 
@@ -980,8 +981,9 @@ def _provider_headers(provider: str, headers: Optional[Dict] = None) -> Dict[str
     if isinstance(headers, dict):
         h.update(headers)
     if provider == "openrouter":
-        h.setdefault("HTTP-Referer", "https://github.com/odysseus-dev/odysseus")
-        h.setdefault("X-OpenRouter-Title", "Odysseus")
+        # Attribute Outis canonically; never disclose an operator's configured source URL.
+        h.setdefault("HTTP-Referer", DEFAULT_OUTIS_SOURCE_URL)
+        h.setdefault("X-OpenRouter-Title", OUTIS_PROJECT_NAME)
     if provider == "copilot":
         # Ensure the Copilot-required headers are present even when the caller
         # didn't pass pre-built headers (e.g. model listing). build_headers()

@@ -907,6 +907,11 @@ async def _cookbook_kill_session(session_id: str, *, remote_host: str = "",
     that's the bug where "stop the download" appeared to work but the
     download kept running on the remote host.
     """
+    from src.cookbook_capabilities import require_cookbook_capability
+    try:
+        require_cookbook_capability("runtime_controller", "stop")
+    except HTTPException as exc:
+        return {"error": str(exc.detail), "exit_code": 1}
     from src.tool_implementations import _internal_headers, _INTERNAL_BASE  # shared, lives in facade
     import httpx
     import shlex
@@ -1009,6 +1014,11 @@ async def do_tail_serve_output(content: str, owner: Optional[str] = None) -> Dic
     flashinfer version mismatch, OOM, missing kernels, etc.) and decide
     whether to relaunch via serve_model with new flags.
     """
+    from src.cookbook_capabilities import require_cookbook_capability
+    try:
+        require_cookbook_capability("runtime_controller", "logs")
+    except HTTPException as exc:
+        return {"error": str(exc.detail), "exit_code": 1}
     from src.tool_implementations import _internal_headers, _INTERNAL_BASE  # shared, lives in facade
     import httpx
     import shlex
@@ -1234,6 +1244,11 @@ async def do_adopt_served_model(content: str, owner: Optional[str] = None) -> Di
       name:          optional display name (defaults to model basename)
       add_endpoint:  bool (default true) — also register as a chat endpoint
     """
+    from src.cookbook_capabilities import require_cookbook_capability
+    try:
+        require_cookbook_capability("runtime_controller", "start")
+    except HTTPException as exc:
+        return {"error": str(exc.detail), "exit_code": 1}
     from src.tool_implementations import _internal_headers, _INTERNAL_BASE  # shared, lives in facade
     import httpx
     import shlex

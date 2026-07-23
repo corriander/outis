@@ -39,6 +39,7 @@ from src.host_docker_access import (
     local_docker_available,
     running_in_container,
 )
+from src.cookbook_capabilities import require_cookbook_capability
 from routes.cookbook_output import (
     error_aware_output_tail, classify_dead_download,
     HF_CACHE_COMPLETE_PROBE, HF_CACHE_INCOMPLETE_PROBE,
@@ -901,6 +902,7 @@ def setup_cookbook_routes() -> APIRouter:
     @router.get("/api/cookbook/ssh-key")
     async def get_cookbook_ssh_key(request: Request):
         require_admin(request)
+        require_cookbook_capability("runtime_controller", "status")
         public_key = _read_cookbook_public_key()
         return {
             "configured": bool(public_key),
@@ -910,6 +912,7 @@ def setup_cookbook_routes() -> APIRouter:
     @router.post("/api/cookbook/ssh-key")
     async def generate_cookbook_ssh_key(request: Request):
         require_admin(request)
+        require_cookbook_capability("runtime_controller", "start")
         ssh_dir = _cookbook_ssh_dir()
         key_path = _cookbook_ssh_key_path()
         ssh_dir.mkdir(parents=True, exist_ok=True)
@@ -941,6 +944,7 @@ def setup_cookbook_routes() -> APIRouter:
     async def test_cookbook_ssh(request: Request, req: CookbookSshTestRequest):
         """Test a configured Cookbook SSH target without using generic shell exec."""
         require_admin(request)
+        require_cookbook_capability("runtime_controller", "status")
         host = validate_remote_host(req.host)
         ssh_port = validate_ssh_port(req.ssh_port)
         try:
@@ -1029,6 +1033,7 @@ def setup_cookbook_routes() -> APIRouter:
         Uses `hf download` CLI directly — runs in tmux via `script -qc`
         for real TTY progress, streams ANSI-stripped output via log file."""
         require_admin(request)
+        require_cookbook_capability("artifact_store", "acquire")
         # Defence-in-depth: even though this endpoint is admin-gated, refuse
         # values that would land in shell contexts with metacharacters.
         backend = (req.backend or "").strip().lower()
@@ -1368,6 +1373,7 @@ def setup_cookbook_routes() -> APIRouter:
     async def model_cached(request: Request, host: str | None = None, model_dir: str | None = None, ssh_port: str | None = None, platform: str | None = None):
         """List cached models. Scans HF cache + optional model directory."""
         require_admin(request)
+        require_cookbook_capability("artifact_store", "list")
         # Validate shell-bound inputs, matching the sibling list_gpus endpoint —
         # `host`/`ssh_port` are interpolated into an ssh command below, so an
         # unvalidated value (e.g. "x'; rm -rf ~ #") would be command injection.
@@ -1932,6 +1938,7 @@ def setup_cookbook_routes() -> APIRouter:
         a fake org/name wrapper.
         """
         require_admin(request)
+        require_cookbook_capability("runtime_controller", "start")
         # Defence-in-depth: reject values that could break out of shell contexts.
         validate_remote_host(req.remote_host)
         req.ssh_port = validate_ssh_port(req.ssh_port)
@@ -2800,6 +2807,7 @@ def setup_cookbook_routes() -> APIRouter:
     async def server_setup(request: Request, req: SetupRequest):
         """Install required dependencies on a remote server via SSH."""
         require_admin(request)
+        require_cookbook_capability("runtime_controller", "start")
         host = validate_remote_host(req.host)
         if not host:
             raise HTTPException(400, "host is required")
@@ -3120,6 +3128,7 @@ def setup_cookbook_routes() -> APIRouter:
         `busy` is True when free_mb/total_mb < 0.5.
         """
         require_admin(request)
+        require_cookbook_capability("runtime_controller", "status")
         host = validate_remote_host(host)
         ssh_port = validate_ssh_port(ssh_port)
         gpu_query = "nvidia-smi --query-gpu=index,name,memory.free,memory.total,memory.used,utilization.gpu,uuid --format=csv,noheader,nounits"
@@ -3284,6 +3293,7 @@ def setup_cookbook_routes() -> APIRouter:
         daemons. Uses `kill -<sig> <pid>` locally or over SSH.
         """
         require_admin(request)
+        require_cookbook_capability("runtime_controller", "stop")
         if req.pid < 100:
             raise HTTPException(400, f"Refusing to signal PID {req.pid} (<100, likely system process)")
         sig = (req.signal or "TERM").upper()
@@ -3330,6 +3340,7 @@ def setup_cookbook_routes() -> APIRouter:
     async def get_cookbook_state(request: Request):
         """Load saved cookbook state (tasks, servers, presets, settings)."""
         require_admin(request)
+        require_cookbook_capability("profile_service", "read")
         now = time.monotonic()
         try:
             mtime = _cookbook_state_path.stat().st_mtime if _cookbook_state_path.exists() else 0.0
@@ -3370,6 +3381,7 @@ def setup_cookbook_routes() -> APIRouter:
         race, not an intentional delete.
         """
         require_admin(request)
+        require_cookbook_capability("profile_service", "write")
         RACE_WINDOW_MS = 60_000
         try:
             from core.atomic_io import atomic_write_json
@@ -4164,6 +4176,7 @@ def setup_cookbook_routes() -> APIRouter:
         event loop. Now the whole body runs in a worker thread via
         asyncio.to_thread so other requests stay responsive."""
         require_admin(request)
+        require_cookbook_capability("runtime_controller", "status")
         now = time.monotonic()
         cached = _tasks_status_cache.get("value")
         if cached is not None and now - float(_tasks_status_cache.get("ts") or 0) < 2.0:

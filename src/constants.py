@@ -1,10 +1,50 @@
 # src/constants.py
 """Application-wide constants and configuration values."""
 import os
+from urllib.parse import urlparse
 
 from src.runtime_paths import get_app_root, get_default_data_dir
 
 APP_VERSION = "1.0.2"
+
+# Outis is distributed under AGPL-3.0-or-later. Network deployments must make
+# the corresponding source for the deployed version easy for users to find.
+# Operators shipping a modified build should override OUTIS_SOURCE_URL with the
+# public source location for that exact build (a tag or commit URL is ideal).
+OUTIS_PROJECT_NAME = "Outis"
+OUTIS_UPSTREAM_NAME = "Odysseus"
+OUTIS_LICENSE = "AGPL-3.0-or-later"
+OUTIS_LICENSE_URL = "https://www.gnu.org/licenses/agpl-3.0.html"
+DEFAULT_OUTIS_SOURCE_URL = "https://github.com/corriander/outis"
+
+
+def outis_source_url() -> str:
+    """Return a safe corresponding-source URL for the running deployment.
+
+    The value is rendered as an HTML link by the browser. Restricting it to
+    ordinary HTTP(S) URLs prevents a deployment environment variable from
+    introducing an executable ``javascript:`` URL into the interface.
+    """
+
+    candidate = os.getenv("OUTIS_SOURCE_URL", DEFAULT_OUTIS_SOURCE_URL).strip()
+    if "\\" in candidate or any(ord(char) < 32 for char in candidate):
+        return DEFAULT_OUTIS_SOURCE_URL
+    try:
+        parsed = urlparse(candidate)
+    except ValueError:
+        return DEFAULT_OUTIS_SOURCE_URL
+    if parsed.scheme in {"http", "https"} and parsed.netloc and not (
+        parsed.username or parsed.password
+    ):
+        return candidate
+    return DEFAULT_OUTIS_SOURCE_URL
+
+
+def outis_build_ref() -> str:
+    """Return optional, display-only build provenance supplied at runtime."""
+
+    value = os.getenv("OUTIS_BUILD_REF", "").strip()
+    return "".join(char for char in value if char.isprintable())[:128]
 
 # Base paths
 BASE_DIR = os.path.join(get_app_root(), "")

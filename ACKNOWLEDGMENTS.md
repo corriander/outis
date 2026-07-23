@@ -1,8 +1,14 @@
 # Acknowledgments
 
-Odysseus stands on the shoulders of a lot of open-source work. This file
-credits the projects whose code, assets, or designs are included in or
-adapted by this repository, and notes their licenses.
+Outis is a downstream fork of
+[Odysseus](https://github.com/odysseus-dev/odysseus). It retains the Odysseus
+copyright and attribution notices and gratefully acknowledges the design,
+implementation, and community work inherited from that project. Outis was
+initially forked from Odysseus v1.0.2 at commit `9844a2f`.
+
+Odysseus, and therefore Outis, stands on the shoulders of a lot of open-source
+work. This file credits the projects whose code, assets, or designs are included
+in or adapted by this repository, and notes their licenses.
 
 If you believe something here is mis-attributed or missing, please open an
 issue — it will be corrected promptly.
@@ -140,8 +146,9 @@ credit:
 
 ### License-compatibility notes (for the repo's own LICENSE choice)
 
-The **core ships fully permissive** (MIT-compatible), so the two copyleft
-concerns from earlier are resolved:
+Most third-party code used by the core is permissively licensed and compatible
+with this repository's AGPL-3.0-or-later licence. Two dependency-specific
+copyleft concerns from earlier were resolved as follows:
 
 - **PDF text extraction** now uses **`pypdf`** (BSD-3-Clause) and **encoding
   detection** uses **`charset-normalizer`** (MIT). chardet (LGPL-2.1) has been
@@ -155,7 +162,7 @@ concerns from earlier are resolved:
 - **`caldav`** (Python lib) is **dual-licensed GPL-3.0-or-later OR Apache-2.0**.
   Odysseus uses it under **Apache-2.0**, which is permissive and MIT-compatible.
 - **`markitdown`** (Microsoft) is **MIT** and used only as an *optional* dependency for Office/EPUB text
-  extraction (`src/markitdown_runtime.py`), lazy-imported with graceful fallback — the MIT core runs without
+  extraction (`src/markitdown_runtime.py`), lazy-imported with graceful fallback — the core runs without
   it. The cloud `az-doc-intel` extra is deliberately **not** installed, keeping extraction fully local.
 
 ---

@@ -678,9 +678,31 @@ def _search_blob(*parts):
     return f"{text} {spaced} {compact}"
 
 
+def split_search_terms(search):
+    """Split a search string into (positive_terms, exclusion_terms).
+
+    A leading ``-`` marks an exclusion: ``opus -mt`` keeps rows matching
+    "opus" and drops rows matching "mt". A bare ``-`` is ignored. Shared by
+    the catalogue matcher below and the broad-discovery route (which must
+    strip exclusions before querying Hugging Face — the Hub API has no
+    negation syntax).
+    """
+    positives, exclusions = [], []
+    for term in re.split(r"\s+", (search or "").strip().lower()):
+        if not term:
+            continue
+        if term.startswith("-"):
+            stripped = term.lstrip("-")
+            if stripped:
+                exclusions.append(stripped)
+        else:
+            positives.append(term)
+    return positives, exclusions
+
+
 def _matches_search(model, search):
-    terms = [t for t in re.split(r"\s+", (search or "").strip().lower()) if t]
-    if not terms:
+    terms, exclusions = split_search_terms(search)
+    if not terms and not exclusions:
         return True
     blob = _search_blob(
         model.get("name"),
@@ -690,6 +712,10 @@ def _matches_search(model, search):
         model.get("format"),
         model.get("parameter_count"),
     )
+    for term in exclusions:
+        norm = re.sub(r"[^a-z0-9]+", "", term)
+        if term in blob or (norm and norm in blob):
+            return False
     for term in terms:
         norm = re.sub(r"[^a-z0-9]+", "", term)
         if term not in blob and (not norm or norm not in blob):

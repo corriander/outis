@@ -10,6 +10,7 @@ import { registerMenuDismiss } from './escMenuStack.js';
 import { computeProgressSignal } from './cookbookProgressSignal.js';
 import { portOf, nextFreePort } from './cookbookPorts.js';
 import { topPortalZ } from './toolWindowZOrder.js';
+import { currentCookbookUiPolicy } from './cookbookCapabilities.js';
 
 // Human-friendly badge label for a task's internal status. Avoids surfacing
 // the word "error" in the sidebar — a server the user stopped or one that
@@ -2047,6 +2048,11 @@ export function _renderRunningTab() {
 
   const body = document.querySelector('#cookbook-modal .cookbook-body');
   if (!body) return;
+  // Provider-less deployments (external mode, no runtime controller) have no
+  // live task state to render; leave the inherited surface in place untouched
+  // rather than removing it — replacement is constructive, never subtractive.
+  const policy = currentCookbookUiPolicy();
+  if (!policy.launch && !policy.download) return;
 
   // Capture expansion state so re-renders don't collapse whatever the user
   // had open. Task output: presence of .cookbook-task-collapsed means collapsed.
@@ -4038,6 +4044,8 @@ export async function _selfHealStaleTasks(opts = {}) {
 }
 
 export function _startBackgroundMonitor() {
+  const policy = currentCookbookUiPolicy();
+  if (!policy.launch && !policy.download) return;
   if (_bgMonitorInterval) return;
   _bgMonitorInterval = setInterval(() => {
     if (!_canBackgroundPoll()) return;

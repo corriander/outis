@@ -36,6 +36,7 @@ import uiModule from './ui.js';
 import spinnerModule from './spinner.js';
 import { _loadTasks, _tmuxGracefulKill, _nextAvailablePort, _taskPort } from './cookbookRunning.js';
 import { openCookbookDependencies } from './cookbook-diagnosis.js';
+import { currentCookbookUiPolicy } from './cookbookCapabilities.js';
 
 // Map a serve-backend code (vllm / sglang / llamacpp / mlx) → the package name
 // the Dependencies API reports. Used to look up "is this backend installed
@@ -397,6 +398,10 @@ function _manualHwParams() {
     manual_vram_gb: s.mode === 'gpu' ? String(s.vramGb || 8) : '',
     manual_ram_gb: s.ramGb ? String(s.ramGb) : '',
     manual_backend: s.mode === 'gpu' ? (s.backend || 'cuda') : '',
+    // Real GPU model (e.g. "7900 XTX") — lets the backend's bandwidth table
+    // match, so manual profiles get the real speed model instead of the
+    // pessimistic per-backend fallback constant.
+    manual_gpu_name: s.mode === 'gpu' ? String(s.gpuName || '') : '',
   };
 }
 
@@ -424,7 +429,9 @@ function _manualHwLabel(s) {
   // sees the simulated TOTAL, not an addition.
   const ram = s.ramGb ? ` · ${s.ramGb} GB RAM` : '';
   if (s.mode === 'ram') return `Manual: ${s.ramGb || 0} GB RAM only`;
-  const gpus = `${s.gpuCount || 1} GPU${Number(s.gpuCount || 1) === 1 ? '' : 's'}`;
+  const gpus = s.gpuName
+    ? `${s.gpuCount || 1}× ${s.gpuName}`
+    : `${s.gpuCount || 1} GPU${Number(s.gpuCount || 1) === 1 ? '' : 's'}`;
   return `Manual: ${gpus} · ${s.vramGb || 8} GB VRAM each${ram}`;
 }
 
@@ -453,7 +460,7 @@ function _manualDisplaySystem(sys, manual) {
     const count = Number(manual.gpuCount || 1);
     const vram = Number(manual.vramGb || 8);
     const backend = (manual.backend || 'cuda').toUpperCase();
-    base.gpu_name = `Simulated ${backend} GPU` + (count > 1 ? ` × ${count}` : '');
+    base.gpu_name = (manual.gpuName || `Simulated ${backend} GPU`) + (count > 1 ? ` × ${count}` : '');
     base.gpu_vram_gb = Math.round(vram * count * 10) / 10;
     base.gpu_count = count;
     base.backend = manual.backend || 'cuda';
@@ -675,6 +682,7 @@ export async function _hwfitFetch(fresh = false, opts = {}) {
   const list = document.getElementById('hwfit-list');
   const hw = document.getElementById('hwfit-hw');
   if (!list) return;
+  const cookbookPolicy = currentCookbookUiPolicy();
   const hasManualOrDismissed = !!_manualHwState() || _dismissedHwChips.size > 0;
   if (hasManualOrDismissed) fresh = true;
   // Instant paint from the persisted cache (skipped on a forced Rescan), so a
@@ -753,7 +761,7 @@ export async function _hwfitFetch(fresh = false, opts = {}) {
   }
   // Only fetch cached model IDs when server changes, not on every search/sort
   const remoteKey = _currentServerValue();
-  if (!_cachedModelIds || _lastCacheHost() !== remoteKey) {
+  if ((cookbookPolicy.download || cookbookPolicy.launch) && (!_cachedModelIds || _lastCacheHost() !== remoteKey)) {
     const _cacheSrv = _serverByVal(_envState.remoteServerKey || remoteHost);
     const _cachePort = _cacheSrv?.port || '';
     const _cacheParams = new URLSearchParams();
@@ -824,11 +832,16 @@ export async function _hwfitFetch(fresh = false, opts = {}) {
     if (hasManualOrDismissed) params.set('_hw_override_ts', String(Date.now()));
     // Image models use a separate registry/endpoint.
     const isImageMode = useCase === 'image_gen';
+    // Extended = Standard catalogue behaviour PLUS broad HF discovery merged
+    // in below. The catalogue query itself must not see "extended" as a
+    // use-case filter (nothing in the catalogue carries it — it would empty
+    // the list), so it degrades to the Standard/general query.
+    const isExtended = useCase === 'extended';
     if ((fresh || (_paintedFromCache && !search)) && !isImageMode) {
       params.set('refresh_catalog', '1'); // update HF-backed dynamic catalogs in the background
     }
     if (!isImageMode) {
-      if (useCase) params.set('use_case', useCase);
+      if (useCase && !isExtended) params.set('use_case', useCase);
       if (quantPref) params.set('quant', quantPref);
       if (targetCtx) params.set('ctx', String(targetCtx));
       // Fit-only filter — set by the dot in the Fit column header.
@@ -850,9 +863,14 @@ export async function _hwfitFetch(fresh = false, opts = {}) {
         msg = body;
       }
       msg = typeof msg === 'string' ? msg.trim() : '';
-      throw new Error(`HTTP ${res.status} ${res.statusText}${msg ? `: ${msg}` : ''}`);
+      // 501 is the capability boundary (external mode: ranking/probing is
+      // provider-owned and absent). Keep the browser alive with an empty
+      // catalogue — broad HF search rows still populate the list below.
+      if (res.status !== 501) {
+        throw new Error(`HTTP ${res.status} ${res.statusText}${msg ? `: ${msg}` : ''}`);
+      }
     }
-    let data = await res.json();
+    let data = res.ok ? await res.json() : { models: [], system: null };
     if (_tk !== _hwfitFetchToken) { try { wp.destroy(); } catch {} return; }
     if (!isImageMode && quantPref && !data.error && Array.isArray(data.models) && data.models.length === 0) {
       const fallbackParams = new URLSearchParams(params);
@@ -899,14 +917,44 @@ export async function _hwfitFetch(fresh = false, opts = {}) {
       const _ramAvail = data.system?.total_ram_gb || 0;
       const _lib = await _ensureOllamaLib();
       const _olRows = _ollamaToHwfitRows(_lib, _vramAvail, _ramAvail);
-      // Search filter on Ollama rows: HF API already filters by search; do the
-      // same client-side over Ollama name + description so the search box
-      // works consistently across both sources.
-      const _s = (search || '').trim().toLowerCase();
-      const _olFiltered = _s
-        ? _olRows.filter(r => r.name.toLowerCase().includes(_s) || (r._description || '').toLowerCase().includes(_s))
-        : _olRows;
+      // Search filter on Ollama rows: the backend catalogue matcher already
+      // handles per-token matching and "-token" exclusions; mirror those
+      // semantics client-side over Ollama name + description so the search
+      // box behaves identically across sources.
+      const _olFiltered = _searchMatchRows(_olRows, search, r => `${r.name} ${r._description || ''}`);
       data.models = (data.models || []).concat(_olFiltered);
+    }
+    // Broad Hugging Face discovery — Extended mode only: an explicit search
+    // ALSO queries HF beyond the curated catalogue — finetunes, adapters,
+    // sparse-metadata repos, the class the static list omits. The backend
+    // enriches each hit through the same name-heuristic + fit-scoring path
+    // as dynamic catalogue entries (#11), so rows merge into the SAME list
+    // as catalogue and Ollama results as first-class rows (tagged HF+).
+    // Standard/Vision never issue this call — the inherited search behaviour
+    // is untouched there. Failures degrade to catalogue-only silently.
+    _hfDiscoveryMeta = null;
+    if (search && !isImageMode && isExtended) {
+      try {
+        // Same hardware/override params as the catalogue query so search rows
+        // rank against the identical (possibly manual) profile; the
+        // catalogue-only knobs don't apply.
+        const dparams = new URLSearchParams(params);
+        ['limit', 'sort', 'search', 'use_case', 'quant', 'fit_only', 'refresh_catalog', '_hw_override_ts'].forEach(k => dparams.delete(k));
+        dparams.set('query', search);
+        dparams.set('limit', '50');
+        if (_hfDiscoveryShowAll) dparams.set('show_all', '1');
+        const dres = await fetch(`/api/hwfit/discover?${dparams}`, { credentials: 'same-origin' });
+        if (_tk !== _hwfitFetchToken) { try { wp.destroy(); } catch {} return; }
+        if (dres.ok) {
+          const dpage = await dres.json();
+          const seen = new Set((data.models || []).map(m => String(m.name || '').toLowerCase()));
+          const drows = _discoveryToHwfitRows(dpage.models).filter(r => !seen.has(r.name.toLowerCase()));
+          data.models = (data.models || []).concat(drows);
+          _hfDiscoveryMeta = { hidden: dpage.hidden_count || 0, showAll: _hfDiscoveryShowAll };
+        }
+      } catch (err) {
+        console.warn('[cookbook] broad HF discovery failed:', err);
+      }
     }
     // Tag the cache with the host this scan was for, so downstream
     // code (_gpuEnvVarName, backend-aware command builders) can avoid
@@ -1218,9 +1266,12 @@ function _wireManualHardwareControls(el) {
   if (manual) {
     panel.querySelector('.hwfit-manual-mode').value = manual.mode || 'gpu';
     panel.querySelector('.hwfit-manual-backend').value = manual.backend || 'cuda';
+    const gpuNameInput = panel.querySelector('.hwfit-manual-gpu-name');
+    if (gpuNameInput) gpuNameInput.value = manual.gpuName || '';
   }
   const syncMode = () => {
     const isRam = panel.querySelector('.hwfit-manual-mode')?.value === 'ram';
+    panel.querySelector('.hwfit-manual-gpu-name')?.closest('label')?.style.setProperty('display', isRam ? 'none' : '');
     panel.querySelector('.hwfit-manual-gpus')?.closest('label')?.style.setProperty('display', isRam ? 'none' : '');
     panel.querySelector('.hwfit-manual-vram')?.closest('label')?.style.setProperty('display', isRam ? 'none' : '');
     const backend = panel.querySelector('.hwfit-manual-backend');
@@ -1248,7 +1299,8 @@ function _wireManualHardwareControls(el) {
       const vramGb = _manualNumber(panel.querySelector('.hwfit-manual-vram')?.value, 8);
       const ramGb = _manualOptionalNumber(panel.querySelector('.hwfit-manual-ram')?.value);
       const backend = panel.querySelector('.hwfit-manual-backend')?.value || 'cuda';
-      const manual = { mode, gpuCount, vramGb, ramGb, backend };
+      const gpuName = String(panel.querySelector('.hwfit-manual-gpu-name')?.value || '').trim().slice(0, 64);
+      const manual = { mode, gpuCount, vramGb, ramGb, backend, gpuName };
       _saveManualHwState(manual);
       _resetGpuToggleState();
       _hwfitCache = null;
@@ -1328,6 +1380,101 @@ function _sortHwfitRows(models) {
   return rows;
 }
 
+// Broad-discovery UI state: the zero-engagement filter note rendered under
+// the list ({hidden, showAll} from the last /discover response) and the
+// user's explicit "show all" override. Reset per fetch.
+let _hfDiscoveryMeta = null;
+let _hfDiscoveryShowAll = false;
+
+// Author-prefix visibility on search-sourced rows (Extended mode). Persisted —
+// hiding it is a per-user reading preference, not a per-session whim.
+const _SHOW_AUTHOR_KEY = 'hwfit_show_author_v1';
+function _showAuthorPrefix() {
+  try { return localStorage.getItem(_SHOW_AUTHOR_KEY) !== '0'; } catch { return true; }
+}
+
+// Below this engagement, a search-sourced row dims: still present (search
+// found it), but the eye can skip it. Zero-engagement rows are already
+// filtered server-side by default; this covers the barely-used tail that
+// survives the filter (or arrives via "show all").
+const _LOW_ENGAGEMENT_DOWNLOADS = 50;
+const _LOW_ENGAGEMENT_LIKES = 5;
+
+// Client-side mirror of the backend catalogue matcher's search semantics
+// (services/hwfit/fit.py:split_search_terms): every positive token must
+// match, and any "-token" exclusion match drops the row. Used for row
+// sources the backend doesn't filter (Ollama library rows).
+function _searchMatchRows(rows, search, blobOf) {
+  const tokens = String(search || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!tokens.length) return rows;
+  const positives = tokens.filter(t => !t.startsWith('-'));
+  const exclusions = tokens.filter(t => t.startsWith('-')).map(t => t.replace(/^-+/, '')).filter(Boolean);
+  return rows.filter(r => {
+    const blob = String(blobOf(r) || '').toLowerCase();
+    if (exclusions.some(x => blob.includes(x))) return false;
+    return positives.every(p => blob.includes(p));
+  });
+}
+
+// Convert /api/hwfit/discover entries (broad HF search) into hwfit rows so
+// they render in the main list alongside catalogue and Ollama rows — the
+// Ollama-library pattern above, applied to a second foreign source. In
+// native mode the backend has already enriched hits through the same
+// name-heuristic + analyze_model path as dynamic catalogue entries (#11),
+// so those arrive row-shaped (fit_level/quant/required_gb/score) and pass
+// through as first-class rows. Hits the backend could not enrich (no
+// parameter estimate) — and every hit in external mode — keep fit "unknown":
+// an unknown must never masquerade as a ranking (docs/cookbook-capabilities.md).
+function _discoveryToHwfitRows(models) {
+  if (!Array.isArray(models)) return [];
+  const out = [];
+  for (const m of models) {
+    const repo = String(m.repo_id || m.name || '').trim();
+    if (!repo) continue;
+    const provenance = {
+      downloads: m.downloads || 0,
+      likes: m.likes || 0,
+      gated: !!m.gated,
+      _isDiscovery: true,
+      _hfUrl: m.url || `https://huggingface.co/${repo}`,
+      _annotations: (m.compatibility && m.compatibility.annotations) || [],
+      _description: [m.pipeline_tag, ...(m.tags || [])].filter(Boolean).join(' '),
+    };
+    if (m.fit_level) {
+      // Enriched server-side — keep every catalogue/analysis field intact.
+      out.push({
+        ...m,
+        ...provenance,
+        name: repo,
+        release_date: String(m.release_date || m.created_at || '').slice(0, 10),
+        _enriched: true,
+      });
+      continue;
+    }
+    // Unenriched fallback: parameter count is a best-effort parse from the
+    // repo name ("…-7B…") — the one spec HF names reliably encode; everything
+    // else stays "?" rather than guessed.
+    const pm = (repo.split('/').pop() || '').match(/(\d+(?:\.\d+)?)\s*[bB]\b/);
+    const params = pm ? parseFloat(pm[1]) : null;
+    out.push({
+      name: repo,
+      fit_level: 'unknown',
+      score: 0,
+      speed_tps: 0,
+      required_gb: 0,
+      params_b: params || 0,
+      parameter_count: params ? `${params}B` : '?',
+      context: 0,
+      quant: '',
+      run_mode: '',
+      release_date: String(m.created_at || '').slice(0, 10),
+      ...provenance,
+    });
+  }
+  return out;
+}
+
+
 export function _hwfitRenderList(el, models) {
   if (!el) return;
   models = _sortHwfitRows(models);
@@ -1341,7 +1488,8 @@ export function _hwfitRenderList(el, models) {
       || document.getElementById('hwfit-quant')?.value
       || document.getElementById('hwfit-engine')?.value);
     let msg;
-    if (hasFilters) msg = 'No models match these filters — try clearing the search, use-case, quant, or engine.';
+    if (!currentCookbookUiPolicy().nativeSettings && !hasFilters) msg = 'Search to discover models on Hugging Face — catalogue ranking awaits an external provider in this deployment mode.';
+    else if (hasFilters) msg = 'No models match these filters — try clearing the search, use-case, quant, or engine.';
     else if (hasHw) msg = 'No models fit — the hardware probe may have under-reported. Try Rescan.';
     else msg = 'No models fit your hardware';
     el.innerHTML = `<div class="hwfit-loading">${msg}</div>`;
@@ -1400,8 +1548,27 @@ export function _hwfitRenderList(el, models) {
     const vramLabel = m.required_gb ? m.required_gb.toFixed(1) + 'G' : '?';
     const moeBadge = m.is_moe ? '<span class="hwfit-badge hwfit-moe">MoE</span>' : '';
     const imgBadge = m.is_image_gen ? '<span class="hwfit-badge" style="background:color-mix(in srgb, var(--red) 20%, transparent);color:var(--red);font-size:8px;padding:1px 4px;border-radius:3px;margin-left:4px;">IMG</span>' : '';
+    // Broad-search rows carry an HF+ badge so catalogue hits and broad hits
+    // stay visually distinguishable in one list — the comparison IS the point.
+    // Enriched rows state that their specs are estimates (the same
+    // name-heuristic grade as dynamic catalogue rows); unenriched rows keep
+    // the stronger "compatibility unassessed" wording.
+    const hfTitle = m._isDiscovery ? [
+      m._enriched
+        ? 'Broad Hugging Face search result — params/quant/VRAM estimated from the repo name, same heuristics as dynamic catalogue rows.'
+        : 'Broad Hugging Face search result — not in the curated catalogue; compatibility unassessed.',
+      `${m.downloads ?? 0} downloads, ${m.likes ?? 0} likes on the Hub.`,
+      ...(m._annotations || []),
+    ].join(' ') : '';
+    const hfBadge = m._isDiscovery ? `<span class="hwfit-badge" style="background:color-mix(in srgb, var(--accent, var(--red)) 16%, transparent);color:var(--accent, var(--red));font-size:8px;padding:1px 4px;border-radius:3px;margin-left:4px;" title="${esc(hfTitle)}">HF+</span>` : '';
+    const hfLink = m._isDiscovery ? ` <a href="${esc(m._hfUrl || ('https://huggingface.co/' + (m.name || '')))}" target="_blank" rel="noopener noreferrer" title="Open on Hugging Face" style="color:inherit;opacity:0.55;text-decoration:none;">↗</a>` : '';
     const dlDot = (_cachedModelIds && (_cachedModelIds.has(m.name) || [..._cachedModelIds].some(id => id === m.name?.split('/').pop()))) ? '<span class="hwfit-dl-dot" title="Downloaded">\u25CF</span>' : '';
-    html += `<div class="hwfit-row" data-model="${esc(m.name)}">`;
+    // Low-engagement search rows dim so they're discardable by eye without
+    // reading the numbers (the numbers stay in the HF+ tooltip).
+    const lowEngagement = m._isDiscovery
+      && (m.downloads || 0) < _LOW_ENGAGEMENT_DOWNLOADS
+      && (m.likes || 0) < _LOW_ENGAGEMENT_LIKES;
+    html += `<div class="hwfit-row${lowEngagement ? ' hwfit-row-lowdl' : ''}" data-model="${esc(m.name)}">`;
     html += `<span class="hwfit-col hwfit-fit" style="color:${fitColor}">${esc(fitLabel)}</span>`;
     // Append quant to the title when it's not already in the repo name. The
     // suffix strips quant-parts the name already contains — e.g. for
@@ -1421,7 +1588,19 @@ export function _hwfitRenderList(el, models) {
         _quantSuffix = ` <span class="hwfit-name-quant" title="${esc(_quantTag)} — full storage format">(${esc(_display)})</span>`;
       }
     }
-    html += `<span class="hwfit-col hwfit-name">${modelLogo(m.name)}${esc(_short)}${_quantSuffix}${moeBadge}${imgBadge}${dlDot}</span>`;
+    // Search-sourced rows show the author/org inline ("which qwopus repos
+    // are Jackrong's" must be answerable at a glance — #11), toggleable via
+    // the Author button in the toolbar. Catalogue rows keep the short name;
+    // their provider is curated and shown by the logo.
+    const _orgPrefix = (m._isDiscovery && _showAuthorPrefix() && m.name?.includes('/'))
+      ? `<span style="opacity:0.55;" title="${esc(m.name)}">${esc(m.name.split('/')[0])}/</span>`
+      : '';
+    // The text part lives in its own shrinkable span so a long repo name
+    // truncates with an ellipsis while the badges (MoE/IMG/HF+/link/dot)
+    // stay visible — previously the whole cell clipped and the HF+ badge
+    // vanished on most long-named rows, taking its provenance tooltip
+    // (downloads/likes) with it.
+    html += `<span class="hwfit-col hwfit-name">${modelLogo(m.name)}<span class="hwfit-name-text">${_orgPrefix}${esc(_short)}${_quantSuffix}</span>${moeBadge}${imgBadge}${hfBadge}${hfLink}${dlDot}</span>`;
     html += `<span class="hwfit-col hwfit-c-vram" title="Estimated loaded footprint for this quant/backend/context, including model weights and KV/runtime allowance.">${vramLabel}</span>`;
     html += `<span class="hwfit-col hwfit-c-params" title="Original total model parameters, not quantized storage size.">${esc(pcount)}</span>`;
     // Truncate the Quant cell to 9 chars + ellipsis so long tags like
@@ -1435,17 +1614,40 @@ export function _hwfitRenderList(el, models) {
     html += `<span class="hwfit-col hwfit-c-mode" title="${_requiresAcceleratorBackend(m) ? 'Requires vLLM or SGLang with a visible CUDA/ROCm accelerator. llama.cpp and Ollama need GGUF files.' : ''}">${esc(modeLabel)}</span>`;
     html += `</div>`;
   }
+  // Zero-engagement filter note (Extended search only) — the backend drops
+  // 0-download/0-like repos by default; state the filter instead of silently
+  // excluding (#11), with a toggle to include them.
+  if (_hfDiscoveryMeta && (_hfDiscoveryMeta.hidden > 0 || _hfDiscoveryMeta.showAll)) {
+    const noteText = _hfDiscoveryMeta.showAll
+      ? 'Including zero-download/zero-like Hugging Face repos.'
+      : `${_hfDiscoveryMeta.hidden} zero-download/zero-like Hugging Face repo${_hfDiscoveryMeta.hidden === 1 ? '' : 's'} hidden.`;
+    const noteAction = _hfDiscoveryMeta.showAll ? 'Hide them' : 'Show all';
+    html += `<div class="hwfit-discovery-note" style="padding:6px 8px;font-size:10.5px;opacity:0.7;">${noteText} <a href="#" data-hf-discovery-showall style="color:var(--accent, var(--red));">${noteAction}</a></div>`;
+  }
   el.innerHTML = html;
+  el.querySelector('[data-hf-discovery-showall]')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    _hfDiscoveryShowAll = !_hfDiscoveryShowAll;
+    _hwfitCache = null;
+    _hwfitFetch();
+  });
   // Click row → expand inline action panel. Exception: Ollama rows skip the
   // expand panel (no HF metadata to power it) and just fill the Download
   // input with the `<name>:<size>` tag — one click → ready to pull.
   el.querySelectorAll('.hwfit-row:not(.hwfit-header)').forEach(row => {
-    row.addEventListener('click', () => {
+    row.addEventListener('click', (e) => {
+      // Links inside a row (the HF+ ↗) navigate; don't also trigger the row.
+      if (e.target.closest('a')) return;
       const name = row.dataset.model;
       if (!name) return;
       const modelData = (_hwfitCache?.models || []).find(m => m.name === name);
       if (!modelData) return;
-      if (modelData._isOllama) {
+      // Ollama rows and UNENRICHED broad-search rows have no metadata to
+      // power the expand panel, so one click fills the Download input with
+      // the repo id — ready to pull in native mode. Enriched search rows
+      // carry the same estimate-grade fields as dynamic catalogue rows and
+      // fall through to the standard expand panel (#11).
+      if (modelData._isOllama || (modelData._isDiscovery && !modelData._enriched)) {
         // Force-open the Download card if it's been collapsed — otherwise
         // filling the (hidden) input silently swallows the click.
         const dlBody = document.getElementById('cookbook-download-card-body');
@@ -2169,7 +2371,28 @@ export function _hwfitInit() {
   const remote = document.getElementById('hwfit-host');
   _syncCtxControl();
   if (uc) _bindHwfitUsecasePicker(uc);
-  if (uc) uc.addEventListener('change', () => _hwfitFetch());
+  // Author toggle: Extended-only (search-sourced rows are the only ones that
+  // carry an author prefix), pure client-side re-render like the Engine
+  // filter. aria-pressed doubles as the visual state hook.
+  const authorBtn = document.getElementById('hwfit-author-toggle');
+  const syncAuthorBtn = () => {
+    if (!authorBtn) return;
+    authorBtn.hidden = (uc?.value || '') !== 'extended';
+    authorBtn.setAttribute('aria-pressed', _showAuthorPrefix() ? 'true' : 'false');
+  };
+  if (authorBtn && !authorBtn.dataset.bound) {
+    authorBtn.dataset.bound = '1';
+    authorBtn.addEventListener('click', () => {
+      try { localStorage.setItem(_SHOW_AUTHOR_KEY, _showAuthorPrefix() ? '0' : '1'); } catch {}
+      syncAuthorBtn();
+      const list = document.getElementById('hwfit-list');
+      if (list && _hwfitCache && Array.isArray(_hwfitCache.models)) {
+        _hwfitRenderList(list, _applyEngineFilter(_hwfitCache.models));
+      }
+    });
+  }
+  syncAuthorBtn();
+  if (uc) uc.addEventListener('change', () => { syncAuthorBtn(); _hwfitFetch(); });
   if (sort) sort.addEventListener('change', () => _hwfitFetch());
   if (qpref) qpref.addEventListener('change', () => _hwfitFetch());
   // Engine filter is a pure client-side view filter over the already-fetched

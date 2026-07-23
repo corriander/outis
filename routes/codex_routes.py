@@ -20,6 +20,7 @@ from src.auth_helpers import require_authenticated_request, require_user
 from src.tool_implementations import do_manage_notes
 from src.constants import COOKBOOK_STATE_FILE
 from routes._validators import validate_remote_host, validate_ssh_port
+from src.cookbook_capabilities import require_cookbook_capability
 
 
 COOKBOOK_READ_SCOPES = {"cookbook:read", "cookbook:launch"}
@@ -568,6 +569,7 @@ def setup_codex_routes(
     @router.get("/cookbook/tasks")
     async def codex_cookbook_tasks(request: Request):
         _require_cookbook_scope(request, COOKBOOK_READ_SCOPES)
+        require_cookbook_capability("runtime_controller", "status")
         state = _read_cookbook_state()
         tasks = state.get("tasks") or []
         return {"tasks": [_redact_task(t) for t in tasks]}
@@ -575,6 +577,7 @@ def setup_codex_routes(
     @router.get("/cookbook/servers")
     async def codex_cookbook_servers(request: Request):
         _require_cookbook_scope(request, COOKBOOK_READ_SCOPES)
+        require_cookbook_capability("runtime_controller", "status")
         state = _read_cookbook_state()
         servers = state.get("env", {}).get("servers") or []
         # Strip ssh creds / passwords; keep only what's needed to pick a host.
@@ -594,6 +597,7 @@ def setup_codex_routes(
     @router.get("/cookbook/output/{session_id}")
     async def codex_cookbook_output(request: Request, session_id: str, tail: int = 400):
         _require_cookbook_scope(request, COOKBOOK_READ_SCOPES)
+        require_cookbook_capability("runtime_controller", "logs")
         # Defensive: session_id must be the tmux-style id we issue
         # (`serve-XXXX` / `cookbook-XXXX` / `queue-XXXX`); anything else
         # would let the agent run arbitrary `tmux capture-pane` targets.
@@ -675,6 +679,7 @@ def setup_codex_routes(
     @router.post("/cookbook/stop/{session_id}")
     async def codex_cookbook_stop(request: Request, session_id: str):
         _require_cookbook_scope(request, COOKBOOK_LAUNCH_SCOPES)
+        require_cookbook_capability("runtime_controller", "stop")
         import re as _re
         if not _re.fullmatch(r"[a-zA-Z0-9_-]+", session_id):
             raise HTTPException(400, "Invalid session id")
@@ -757,6 +762,7 @@ def setup_codex_routes(
         Counterpart to `list_serve_presets`. Use BEFORE composing a `serve`
         body — the user's saved preset usually has the working cmd already."""
         _require_cookbook_scope(request, COOKBOOK_READ_SCOPES)
+        require_cookbook_capability("profile_service", "read")
         state = _read_cookbook_state()
         presets = state.get("presets") or []
         out = []
@@ -829,6 +835,7 @@ def setup_codex_routes(
         agent falls back to direct ssh — without adoption the session is
         invisible to the UI. Body: {tmux_session, model, host?, port?}."""
         _require_cookbook_scope(request, COOKBOOK_LAUNCH_SCOPES)
+        require_cookbook_capability("runtime_controller", "start")
         norm = dict(body or {})
         sess = (norm.get("tmux_session") or norm.get("session_id") or "").strip()
         model = (norm.get("model") or norm.get("repo_id") or "").strip()
