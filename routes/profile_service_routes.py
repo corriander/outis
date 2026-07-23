@@ -4,15 +4,17 @@ Every route sits behind the existing Outis admin/session authority and forwards
 to the configured external service through ``ProfileServiceClient``. The service
 bearer token is held server-side only: it is never placed in a browser response
 body, header, cookie, or local storage. Structured provider errors and warnings
-are preserved verbatim so the eventual editor (WS-05B) can render them; the one
-translation is an upstream 401, which becomes a 502 server-configuration error
-rather than a browser 401 (the browser is authorised; the server is not).
+are preserved verbatim so a future profile editor can render field- and
+profile-level feedback; the one translation is an upstream 401, which becomes a
+502 server-configuration error rather than a browser 401 (the browser is
+authorised; the server is not).
 """
 
 from __future__ import annotations
 
 import json
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
@@ -28,6 +30,9 @@ from profile_service.client import (
 )
 
 _PREFIX = "/api/cookbook/profile-service"
+# Upstream profile resources live at ``/v1/profiles/{id}``; the browser must
+# reach them through this proxy prefix instead.
+_UPSTREAM_PROFILE_PREFIX = "/v1/profiles/"
 
 
 def _envelope(status_code: int, code: str, message: str) -> JSONResponse:
@@ -38,12 +43,37 @@ def _envelope(status_code: int, code: str, message: str) -> JSONResponse:
     )
 
 
+def _translate_location(location: str | None) -> str | None:
+    """Map an upstream profile ``Location`` onto this proxy, or drop it.
+
+    The upstream returns a relative resource location such as
+    ``/v1/profiles/example``. Rewritten, the browser can follow it back through
+    the proxy. Anything else -- an absolute or off-origin URL, a decorated URL,
+    or a path that is not a single-segment profile resource -- is suppressed
+    rather than forwarded, so the browser is never sent to a route that does not
+    exist here or to another origin.
+    """
+    if not location:
+        return None
+    parsed = urlsplit(location)
+    if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
+        return None
+    path = parsed.path
+    if not path.startswith(_UPSTREAM_PROFILE_PREFIX):
+        return None
+    remainder = path[len(_UPSTREAM_PROFILE_PREFIX):]
+    if not remainder or "/" in remainder:
+        return None
+    return f"{_PREFIX}/profiles/{remainder}"
+
+
 def _forward(response: ProfileServiceResponse) -> Response:
     headers: dict[str, str] = {}
     if response.etag:
         headers["ETag"] = response.etag
-    if response.location:
-        headers["Location"] = response.location
+    location = _translate_location(response.location)
+    if location:
+        headers["Location"] = location
     if response.body is None:
         return Response(status_code=response.status_code, headers=headers)
     return JSONResponse(status_code=response.status_code, content=response.body, headers=headers)
@@ -53,7 +83,15 @@ def setup_profile_service_routes() -> APIRouter:
     router = APIRouter()
 
     def _client() -> ProfileServiceClient | JSONResponse:
-        client = ProfileServiceClient.from_env()
+        try:
+            client = ProfileServiceClient.from_env()
+        except ProfileServiceError:
+            # A misconfigured URL is a server-side fault, not a browser one.
+            return _envelope(
+                502,
+                "profile_service_invalid",
+                "The configured ProfileService is misconfigured.",
+            )
         if client is None:
             return _envelope(
                 501,
@@ -99,9 +137,14 @@ def setup_profile_service_routes() -> APIRouter:
         if not raw:
             return {}
         try:
-            return json.loads(raw)
+            parsed = json.loads(raw)
         except ValueError:
             return _envelope(400, "invalid_json", "Request body is not valid JSON.")
+        if not isinstance(parsed, dict):
+            # A bare array, string, number, or null is valid JSON but not a
+            # request object; the routes below index it as one.
+            return _envelope(400, "invalid_request_body", "Request body must be a JSON object.")
+        return parsed
 
     def _if_match(request: Request) -> str | None:
         # Forward the browser's explicit expected-version only. Never synthesise

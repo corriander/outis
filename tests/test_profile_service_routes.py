@@ -249,7 +249,8 @@ async def test_create_surfaces_etag_and_location(monkeypatch):
     )
     assert response.status_code == 201
     assert response.headers["etag"] == '"abc123"'
-    assert response.headers["location"] == "/v1/profiles/example"
+    # The upstream relative Location is rewritten onto this proxy.
+    assert response.headers["location"] == "/api/cookbook/profile-service/profiles/example"
 
 
 @pytest.mark.asyncio
@@ -324,6 +325,82 @@ async def test_malformed_json_body_returns_400(monkeypatch):
     )
     assert response.status_code == 400
     assert _body(response)["errors"][0]["code"] == "invalid_json"
+
+
+@pytest.mark.parametrize(
+    ("upstream", "expected"),
+    [
+        ("/v1/profiles/example", "/api/cookbook/profile-service/profiles/example"),
+        ("/v1/profiles/name%20with%20space", "/api/cookbook/profile-service/profiles/name%20with%20space"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_relative_profile_location_is_rewritten(monkeypatch, upstream, expected):
+    result = ProfileServiceResponse(
+        201, {"data": {"profile": {"id": "example"}}, "warnings": []}, location=upstream
+    )
+    _install(monkeypatch, FakeClient(result=result))
+    endpoint = _endpoint("/api/cookbook/profile-service/profiles", "POST")
+
+    response = await endpoint(
+        _request("/api/cookbook/profile-service/profiles", "POST",
+                 body={"artifact_ref": {"authority": "a", "artifact_id": "b"}, "values": {}})
+    )
+    assert response.headers["location"] == expected
+
+
+@pytest.mark.parametrize(
+    "upstream",
+    [
+        "https://evil.invalid/v1/profiles/example",   # absolute / off-origin
+        "//evil.invalid/v1/profiles/example",          # protocol-relative
+        "/etc/passwd",                                  # unrelated path
+        "/v1/profiles/",                                # empty id
+        "/v1/profiles/a/b",                             # multi-segment
+        "/v1/artifacts/example",                        # unrelated resource
+        "/v1/profiles/example?x=1",                     # decorated
+    ],
+)
+@pytest.mark.asyncio
+async def test_unsafe_or_unrelated_location_is_suppressed(monkeypatch, upstream):
+    result = ProfileServiceResponse(
+        201, {"data": {"profile": {"id": "example"}}, "warnings": []}, location=upstream
+    )
+    _install(monkeypatch, FakeClient(result=result))
+    endpoint = _endpoint("/api/cookbook/profile-service/profiles", "POST")
+
+    response = await endpoint(
+        _request("/api/cookbook/profile-service/profiles", "POST",
+                 body={"artifact_ref": {"authority": "a", "artifact_id": "b"}, "values": {}})
+    )
+    assert "location" not in response.headers
+
+
+@pytest.mark.asyncio
+async def test_invalid_configured_url_returns_502(monkeypatch):
+    # Do not patch from_env: let the real constructor reject the bad URL and the
+    # proxy map that construction failure into the structured envelope.
+    monkeypatch.setenv("AUTH_ENABLED", "false")
+    monkeypatch.setenv("OUTIS_PROFILE_SERVICE_URL", "not a valid url")
+    endpoint = _endpoint("/api/cookbook/profile-service", "GET")
+
+    response = await endpoint(_request("/api/cookbook/profile-service"))
+    assert response.status_code == 502
+    assert _body(response)["errors"][0]["code"] == "profile_service_invalid"
+
+
+@pytest.mark.parametrize("raw", [b"[]", b"null", b'"string"', b"42"])
+@pytest.mark.asyncio
+async def test_non_object_json_body_is_rejected(monkeypatch, raw):
+    # Valid JSON, but not an object: the routes below index the body as a map.
+    _install(monkeypatch, FakeClient(result=ProfileServiceResponse(200, {})))
+    endpoint = _endpoint("/api/cookbook/profile-service/preview", "POST")
+
+    response = await endpoint(
+        _request("/api/cookbook/profile-service/preview", "POST", body=raw)
+    )
+    assert response.status_code == 400
+    assert _body(response)["errors"][0]["code"] == "invalid_request_body"
 
 
 @pytest.mark.asyncio
