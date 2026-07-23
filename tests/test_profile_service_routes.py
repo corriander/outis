@@ -249,7 +249,7 @@ async def test_create_surfaces_etag_and_location(monkeypatch):
     )
     assert response.status_code == 201
     assert response.headers["etag"] == '"abc123"'
-    # The upstream relative Location is rewritten onto this proxy.
+    # Location is built from the validated body id, mapped onto this proxy.
     assert response.headers["location"] == "/api/cookbook/profile-service/profiles/example"
 
 
@@ -328,16 +328,20 @@ async def test_malformed_json_body_returns_400(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("upstream", "expected"),
+    ("profile_id", "expected_segment"),
     [
-        ("/v1/profiles/example", "/api/cookbook/profile-service/profiles/example"),
-        ("/v1/profiles/name%20with%20space", "/api/cookbook/profile-service/profiles/name%20with%20space"),
+        ("example", "example"),
+        ("name with space", "name%20with%20space"),
+        ("a-b_c.d", "a-b_c.d"),
     ],
 )
 @pytest.mark.asyncio
-async def test_relative_profile_location_is_rewritten(monkeypatch, upstream, expected):
+async def test_location_is_built_from_validated_body_id(monkeypatch, profile_id, expected_segment):
+    # The Location value comes from the validated profile id in the body,
+    # canonically re-encoded -- never from the untrusted upstream header path.
     result = ProfileServiceResponse(
-        201, {"data": {"profile": {"id": "example"}}, "warnings": []}, location=upstream
+        201, {"data": {"profile": {"id": profile_id}}, "warnings": []},
+        location="/v1/profiles/whatever-the-upstream-claimed",
     )
     _install(monkeypatch, FakeClient(result=result))
     endpoint = _endpoint("/api/cookbook/profile-service/profiles", "POST")
@@ -346,25 +350,28 @@ async def test_relative_profile_location_is_rewritten(monkeypatch, upstream, exp
         _request("/api/cookbook/profile-service/profiles", "POST",
                  body={"artifact_ref": {"authority": "a", "artifact_id": "b"}, "values": {}})
     )
-    assert response.headers["location"] == expected
+    assert response.headers["location"] == f"/api/cookbook/profile-service/profiles/{expected_segment}"
 
 
 @pytest.mark.parametrize(
-    "upstream",
+    "profile_id",
     [
-        "https://evil.invalid/v1/profiles/example",   # absolute / off-origin
-        "//evil.invalid/v1/profiles/example",          # protocol-relative
-        "/etc/passwd",                                  # unrelated path
-        "/v1/profiles/",                                # empty id
-        "/v1/profiles/a/b",                             # multi-segment
-        "/v1/artifacts/example",                        # unrelated resource
-        "/v1/profiles/example?x=1",                     # decorated
+        ".",         # current-segment
+        "..",        # parent traversal
+        "%2e%2e",    # encoded ".." -> traversal once decoded
+        "%2Fadmin",  # encoded slash -> smuggled second segment
+        "a/b",       # literal slash
+        "a\\b",      # backslash
+        "",          # empty
     ],
 )
 @pytest.mark.asyncio
-async def test_unsafe_or_unrelated_location_is_suppressed(monkeypatch, upstream):
+async def test_unsafe_body_id_suppresses_location(monkeypatch, profile_id):
+    # A hostile profile id must never yield a proxy Location that escapes or
+    # traverses the single profile segment; the header is dropped instead.
     result = ProfileServiceResponse(
-        201, {"data": {"profile": {"id": "example"}}, "warnings": []}, location=upstream
+        201, {"data": {"profile": {"id": profile_id}}, "warnings": []},
+        location="/v1/profiles/x",
     )
     _install(monkeypatch, FakeClient(result=result))
     endpoint = _endpoint("/api/cookbook/profile-service/profiles", "POST")
@@ -372,6 +379,22 @@ async def test_unsafe_or_unrelated_location_is_suppressed(monkeypatch, upstream)
     response = await endpoint(
         _request("/api/cookbook/profile-service/profiles", "POST",
                  body={"artifact_ref": {"authority": "a", "artifact_id": "b"}, "values": {}})
+    )
+    assert "location" not in response.headers
+
+
+@pytest.mark.asyncio
+async def test_no_location_when_upstream_omits_it(monkeypatch):
+    # A read carries no upstream Location; the proxy does not fabricate one from
+    # the body id.
+    result = ProfileServiceResponse(
+        200, {"data": {"profile": {"id": "example", "values": {}}}, "warnings": []}
+    )
+    _install(monkeypatch, FakeClient(result=result))
+    endpoint = _endpoint("/api/cookbook/profile-service/profiles/{profile_id}", "GET")
+
+    response = await endpoint(
+        _request("/api/cookbook/profile-service/profiles/example"), profile_id="example"
     )
     assert "location" not in response.headers
 

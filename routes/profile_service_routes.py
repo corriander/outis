@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, unquote
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
@@ -30,9 +30,6 @@ from profile_service.client import (
 )
 
 _PREFIX = "/api/cookbook/profile-service"
-# Upstream profile resources live at ``/v1/profiles/{id}``; the browser must
-# reach them through this proxy prefix instead.
-_UPSTREAM_PROFILE_PREFIX = "/v1/profiles/"
 
 
 def _envelope(status_code: int, code: str, message: str) -> JSONResponse:
@@ -43,37 +40,51 @@ def _envelope(status_code: int, code: str, message: str) -> JSONResponse:
     )
 
 
-def _translate_location(location: str | None) -> str | None:
-    """Map an upstream profile ``Location`` onto this proxy, or drop it.
+def _proxy_location(profile_id: str) -> str | None:
+    """Map a profile id onto exactly one safe proxy path segment, or drop it.
 
-    The upstream returns a relative resource location such as
-    ``/v1/profiles/example``. Rewritten, the browser can follow it back through
-    the proxy. Anything else -- an absolute or off-origin URL, a decorated URL,
-    or a path that is not a single-segment profile resource -- is suppressed
-    rather than forwarded, so the browser is never sent to a route that does not
-    exist here or to another origin.
+    The id is a single segment: reject anything empty, a bare ``.``/``..``, or a
+    value that carries a path separator -- directly or once percent-decoded, so
+    ``%2e%2e`` and ``%2Fadmin`` cannot smuggle a second segment or a traversal.
+    The surviving id is then percent-encoded canonically, never interpolated raw.
     """
-    if not location:
+    if not profile_id or profile_id in (".", ".."):
         return None
-    parsed = urlsplit(location)
-    if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
+    if "/" in profile_id or "\\" in profile_id:
         return None
-    path = parsed.path
-    if not path.startswith(_UPSTREAM_PROFILE_PREFIX):
+    decoded = unquote(profile_id)
+    if decoded in (".", "..") or "/" in decoded or "\\" in decoded:
         return None
-    remainder = path[len(_UPSTREAM_PROFILE_PREFIX):]
-    if not remainder or "/" in remainder:
+    return f"{_PREFIX}/profiles/{quote(profile_id, safe='')}"
+
+
+def _location_from_body(body: Any) -> str | None:
+    """Derive the created profile's proxy Location from the validated body id.
+
+    The upstream ``Location`` header is not trusted for its value; the profile
+    id has already passed structural validation in the client, so the proxy
+    Location is built from that id (canonically re-encoded) instead.
+    """
+    if not isinstance(body, dict):
         return None
-    return f"{_PREFIX}/profiles/{remainder}"
+    data = body.get("data")
+    profile = data.get("profile") if isinstance(data, dict) else None
+    profile_id = profile.get("id") if isinstance(profile, dict) else None
+    if not isinstance(profile_id, str):
+        return None
+    return _proxy_location(profile_id)
 
 
 def _forward(response: ProfileServiceResponse) -> Response:
     headers: dict[str, str] = {}
     if response.etag:
         headers["ETag"] = response.etag
-    location = _translate_location(response.location)
-    if location:
-        headers["Location"] = location
+    # Emit a Location only when the upstream offered one (a create), but take its
+    # value from the validated body id -- never from the untrusted header path.
+    if response.location:
+        location = _location_from_body(response.body)
+        if location:
+            headers["Location"] = location
     if response.body is None:
         return Response(status_code=response.status_code, headers=headers)
     return JSONResponse(status_code=response.status_code, content=response.body, headers=headers)
