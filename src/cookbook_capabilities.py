@@ -13,6 +13,10 @@ import os
 from fastapi import HTTPException
 
 from artifact_store.client import artifact_store_configured, configured_artifact_store_name
+from profile_service.client import (
+    configured_profile_service_name,
+    profile_service_configured,
+)
 
 
 _NATIVE_VALUES = {"native", "odysseus"}
@@ -25,6 +29,12 @@ def cookbook_capabilities() -> dict:
     provider = "odysseus-native" if native else None
     external_artifacts = artifact_store_configured()
     artifact_list_provider = configured_artifact_store_name() if external_artifacts else provider
+    # Inventory and profile providers are selected independently. An external
+    # ProfileService is an additive adapter: it never re-enables the inherited
+    # local profile routes (which stay gated on the native ``read``/``write``
+    # flags below), and it is only reachable through the same-origin proxy.
+    external_profiles = profile_service_configured()
+    profile_provider = configured_profile_service_name() if external_profiles else provider
 
     return {
         "schema_version": 1,
@@ -47,9 +57,24 @@ def cookbook_capabilities() -> dict:
                 },
             },
             "profile_service": {
-                "provider": provider,
+                "provider": profile_provider,
+                # ``read``/``write`` gate the inherited host-side profile routes
+                # and remain native-only; an external provider must not switch
+                # them on, or the proxy would fall through to local files.
                 "read": native,
                 "write": native,
+                # A conforming external ProfileService is configured. Its
+                # read/write is reached solely through the same-origin proxy at
+                # ``/api/cookbook/profile-service``. Accepted artifact
+                # authorities are advertised by that service's discovery
+                # document, not inferred here: the synchronous capability
+                # document cannot honestly enumerate them without live I/O, so
+                # the browser reads them from the proxied discovery response.
+                "external": external_profiles,
+                "operation_providers": {
+                    "read": profile_provider if external_profiles else provider,
+                    "write": profile_provider if external_profiles else provider,
+                },
             },
             "runtime_controller": {
                 "provider": provider,
