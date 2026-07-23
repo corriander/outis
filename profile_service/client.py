@@ -366,20 +366,29 @@ class ProfileServiceClient:
         return ProfileServiceResponse(status_code, body, etag, location)
 
     def _validated(
-        self, response: ProfileServiceResponse, success_model: type[BaseModel] | None
+        self,
+        response: ProfileServiceResponse,
+        success_model: type[BaseModel] | None,
+        success_status: int,
     ) -> ProfileServiceResponse:
         """Validate an upstream envelope's structure, then forward it unchanged.
 
-        A 2xx body is checked against the endpoint's success model; any other
-        status must carry the structured error envelope. Either way the original
-        dict is returned so errors, warnings, and additive fields are preserved.
-
-        A bodyless 2xx is valid only where the contract defines one -- DELETE's
-        204, signalled by ``success_model is None``. Every other endpoint has a
-        success envelope, so an empty 2xx body is validated against (and
-        rejected by) its model rather than being waved through.
+        Success is endpoint-specific: each operation defines the exact 2xx it
+        may answer with -- 201 for create, 204 for delete, 200 for the rest.
+        Any other 2xx (a delete replying 200-with-body, a create replying 200)
+        violates the contract and becomes ``ProfileServiceInvalid`` rather than
+        being waved through. On the defined success the body is checked against
+        the endpoint's model; a bodyless success is valid only where the model
+        is ``None`` (DELETE's 204). Any non-2xx must carry the structured error
+        envelope. Either way the original dict is returned so errors, warnings,
+        and additive fields are preserved.
         """
         if 200 <= response.status_code < 300:
+            if response.status_code != success_status:
+                raise ProfileServiceInvalid(
+                    f"ProfileService answered {response.status_code} where "
+                    f"{success_status} is the contract success status"
+                )
             if success_model is None:
                 return response
             _validate(response.body if response.body is not None else {},
@@ -417,23 +426,23 @@ class ProfileServiceClient:
             "/v1/profiles/draft",
             json_body={"artifact_ref": normalise_artifact_ref(artifact_ref), "template": None},
         )
-        return self._validated(response, _DraftEnvelope)
+        return self._validated(response, _DraftEnvelope, 200)
 
     async def preview(self, values: Any) -> ProfileServiceResponse:
         response = await self._request(
             "POST", "/v1/profiles/preview", json_body={"values": values}
         )
-        return self._validated(response, _PreviewEnvelope)
+        return self._validated(response, _PreviewEnvelope, 200)
 
     # -- profile CRUD ------------------------------------------------------
 
     async def list_profiles(self) -> ProfileServiceResponse:
         response = await self._request("GET", "/v1/profiles")
-        return self._validated(response, _ListEnvelope)
+        return self._validated(response, _ListEnvelope, 200)
 
     async def read_profile(self, profile_id: str) -> ProfileServiceResponse:
         response = await self._request("GET", f"/v1/profiles/{_encode_id(profile_id)}")
-        return self._validated(response, _ProfileEnvelope)
+        return self._validated(response, _ProfileEnvelope, 200)
 
     async def create_profile(self, artifact_ref: Any, values: Any) -> ProfileServiceResponse:
         response = await self._request(
@@ -441,7 +450,7 @@ class ProfileServiceClient:
             "/v1/profiles",
             json_body={"artifact_ref": normalise_artifact_ref(artifact_ref), "values": values},
         )
-        return self._validated(response, _ProfileEnvelope)
+        return self._validated(response, _ProfileEnvelope, 201)
 
     async def replace_profile(
         self, profile_id: str, values: Any, *, if_match: str | None
@@ -452,7 +461,7 @@ class ProfileServiceClient:
             json_body={"values": values},
             if_match=if_match,
         )
-        return self._validated(response, _ProfileEnvelope)
+        return self._validated(response, _ProfileEnvelope, 200)
 
     async def patch_profile(
         self,
@@ -473,7 +482,7 @@ class ProfileServiceClient:
             json_body=payload,
             if_match=if_match,
         )
-        return self._validated(response, _ProfileEnvelope)
+        return self._validated(response, _ProfileEnvelope, 200)
 
     async def delete_profile(
         self, profile_id: str, *, if_match: str | None
@@ -481,8 +490,9 @@ class ProfileServiceClient:
         response = await self._request(
             "DELETE", f"/v1/profiles/{_encode_id(profile_id)}", if_match=if_match
         )
-        # Success is a bodyless 204; only an error status carries an envelope.
-        return self._validated(response, None)
+        # Success is a bodyless 204; a 2xx that is not 204, or any other status
+        # without an error envelope, is rejected as an invalid response.
+        return self._validated(response, None, 204)
 
 
 def _encode_id(profile_id: str) -> str:

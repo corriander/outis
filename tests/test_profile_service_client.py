@@ -562,6 +562,30 @@ async def test_list_entry_without_values_is_invalid():
         await _client(handler).list_profiles()
 
 
+@pytest.mark.asyncio
+async def test_create_with_wrong_success_status_is_invalid():
+    # Create's contract success is 201; a 200 (even with a valid-looking body)
+    # is not the defined success status.
+    def handler(request):
+        return _json(
+            {"data": {"profile": {"id": "example", "values": {"name": "example"}}}, "warnings": []},
+            status=200,
+        )
+
+    with pytest.raises(ProfileServiceInvalid):
+        await _client(handler).create_profile({"authority": "a", "artifact_id": "b"}, {"name": "x"})
+
+
+@pytest.mark.asyncio
+async def test_delete_with_body_instead_of_204_is_invalid():
+    # Delete's only success is a bodyless 204; a 200-with-body is a violation.
+    def handler(request):
+        return _json({"data": {"profile": {"id": "example", "values": {}}}, "warnings": []}, status=200)
+
+    with pytest.raises(ProfileServiceInvalid):
+        await _client(handler).delete_profile("example", if_match='"e"')
+
+
 # -- ambient proxy refusal (real loopback server) -------------------------
 
 
