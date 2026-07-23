@@ -290,7 +290,7 @@ async def test_preview_invalid_values_returned_not_raised():
 async def test_create_captures_etag_and_location():
     def handler(request):
         return _json(
-            {"data": {"profile": {"id": "example"}}, "warnings": []},
+            {"data": {"profile": {"id": "example", "values": {"name": "example"}}}, "warnings": []},
             status=201,
             headers={"ETag": '"abc123"', "Location": "/v1/profiles/example"},
         )
@@ -307,7 +307,7 @@ async def test_create_captures_etag_and_location():
 async def test_read_captures_etag():
     def handler(request):
         return _json(
-            {"data": {"profile": {"id": "example"}}, "warnings": []},
+            {"data": {"profile": {"id": "example", "values": {"name": "example"}}}, "warnings": []},
             headers={"ETag": '"live"'},
         )
 
@@ -322,7 +322,10 @@ async def test_patch_forwards_if_match_and_set_clear():
     def handler(request):
         captured["if_match"] = request.headers.get("If-Match")
         captured["body"] = json.loads(request.content)
-        return _json({"data": {"profile": {}}, "warnings": []}, headers={"ETag": '"new"'})
+        return _json(
+            {"data": {"profile": {"id": "example", "values": {"name": "example"}}}, "warnings": []},
+            headers={"ETag": '"new"'},
+        )
 
     await _client(handler).patch_profile(
         "example", set_values={"ctx_size": 65536}, clear=["description"], if_match='"abc123"'
@@ -378,6 +381,100 @@ def test_normalise_artifact_ref_keeps_only_wire_keys():
 def test_normalise_artifact_ref_rejects_non_mapping():
     with pytest.raises(ProfileServiceError):
         normalise_artifact_ref("not-a-ref")
+
+
+# -- streamed response-size limit -----------------------------------------
+
+
+class _ChunkStream(httpx.AsyncByteStream):
+    """A response body that streams pre-set chunks with no Content-Length."""
+
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    async def __aiter__(self):
+        for chunk in self._chunks:
+            yield chunk
+
+    async def aclose(self):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_declared_content_length_over_limit_is_rejected(monkeypatch):
+    monkeypatch.setattr("profile_service.client.MAX_PROFILE_SERVICE_BYTES", 500)
+
+    def handler(request):
+        return httpx.Response(200, headers={"Content-Length": "999999"}, stream=_ChunkStream([b"{}"]))
+
+    with pytest.raises(ProfileServiceInvalid):
+        await _client(handler).list_profiles()
+
+
+@pytest.mark.asyncio
+async def test_streamed_body_over_limit_without_content_length_is_rejected(monkeypatch):
+    monkeypatch.setattr("profile_service.client.MAX_PROFILE_SERVICE_BYTES", 500)
+
+    def handler(request):
+        return httpx.Response(200, stream=_ChunkStream([b"x" * 300, b"y" * 300]))
+
+    with pytest.raises(ProfileServiceInvalid):
+        await _client(handler).list_profiles()
+
+
+@pytest.mark.asyncio
+async def test_body_just_below_limit_is_read(monkeypatch):
+    monkeypatch.setattr("profile_service.client.MAX_PROFILE_SERVICE_BYTES", 500)
+    body = {"data": {"profiles": []}, "warnings": []}
+
+    def handler(request):
+        return _json(body)
+
+    response = await _client(handler).list_profiles()
+    assert response.body == body
+
+
+# -- response envelope validation -----------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_unstructured_success_body_is_invalid():
+    with pytest.raises(ProfileServiceInvalid):
+        await _client(lambda r: _json({})).read_profile("example")
+
+
+@pytest.mark.asyncio
+async def test_profile_without_values_is_invalid():
+    def handler(request):
+        return _json({"data": {"profile": {"id": "example"}}, "warnings": []}, status=201)
+
+    with pytest.raises(ProfileServiceInvalid):
+        await _client(handler).create_profile(
+            {"authority": "a", "artifact_id": "b"}, {"name": "example"}
+        )
+
+
+@pytest.mark.asyncio
+async def test_list_without_profiles_list_is_invalid():
+    with pytest.raises(ProfileServiceInvalid):
+        await _client(lambda r: _json({"data": {}, "warnings": []})).list_profiles()
+
+
+@pytest.mark.asyncio
+async def test_error_status_without_envelope_is_invalid():
+    # A 500 that does not carry the structured {errors, warnings} envelope is
+    # not a valid v1 response.
+    with pytest.raises(ProfileServiceInvalid):
+        await _client(lambda r: _json({"detail": "boom"}, status=500)).read_profile("example")
+
+
+@pytest.mark.asyncio
+async def test_structured_domain_error_is_forwarded_not_raised():
+    envelope = {"errors": [{"pointer": "/", "code": "profile_not_found", "message": "no"}],
+                "warnings": []}
+    response = await _client(lambda r: _json(envelope, status=404)).read_profile("example")
+    assert response.status_code == 404
+    assert response.body == envelope
 
 
 # -- ambient proxy refusal (real loopback server) -------------------------
