@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import os
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
 
+# The inventory document is small in practice. This ceiling still refuses a
+# hostile or misconfigured provider that streams an unbounded body. It is
+# enforced incrementally while the body streams in, so an oversize or
+# never-ending response is abandoned rather than fully buffered first.
 MAX_INVENTORY_BYTES = 5 * 1024 * 1024
 
 
@@ -49,10 +54,20 @@ def _validated_base_url(value: str) -> str:
 
 
 class ArtifactStoreClient:
-    def __init__(self, base_url: str, token: str | None = None, timeout_seconds: float = 10.0):
+    def __init__(
+        self,
+        base_url: str,
+        token: str | None = None,
+        timeout_seconds: float = 10.0,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ):
         self.base_url = _validated_base_url(base_url)
         self.token = token.strip() if token else None
         self.timeout_seconds = timeout_seconds
+        # Test seam only: production leaves this None so httpx builds its own
+        # transport. It never alters follow_redirects / trust_env, which stay
+        # off regardless of the transport supplied.
+        self._transport = transport
 
     @classmethod
     def from_env(cls) -> "ArtifactStoreClient | None":
@@ -74,19 +89,23 @@ class ArtifactStoreClient:
                 timeout=self.timeout_seconds,
                 follow_redirects=False,
                 trust_env=False,
+                transport=self._transport,
             ) as client:
-                response = await client.get(f"{self.base_url}/v1/artifacts", headers=headers)
+                async with client.stream(
+                    "GET", f"{self.base_url}/v1/artifacts", headers=headers
+                ) as response:
+                    if response.status_code != 200:
+                        raise ArtifactStoreUnavailable(
+                            f"ArtifactStore provider returned HTTP {response.status_code}"
+                        )
+                    content = await self._read_capped(response)
         except (httpx.TimeoutException, httpx.NetworkError) as exc:
             raise ArtifactStoreUnavailable("ArtifactStore provider is unreachable") from exc
         except httpx.HTTPError as exc:
             raise ArtifactStoreUnavailable("ArtifactStore provider request failed") from exc
 
-        if response.status_code != 200:
-            raise ArtifactStoreUnavailable(f"ArtifactStore provider returned HTTP {response.status_code}")
-        if len(response.content) > MAX_INVENTORY_BYTES:
-            raise ArtifactStoreError("ArtifactStore inventory exceeds the 5 MiB response limit")
         try:
-            document = response.json()
+            document = json.loads(content)
         except ValueError as exc:
             raise ArtifactStoreError("ArtifactStore provider returned invalid JSON") from exc
         if not isinstance(document, dict) or document.get("schema_version") != 1:
@@ -96,3 +115,31 @@ class ArtifactStoreClient:
         if not isinstance(document.get("artifacts"), list):
             raise ArtifactStoreError("ArtifactStore artifacts must be a list")
         return document
+
+    async def _read_capped(self, response: httpx.Response) -> bytes:
+        """Read the response body, enforcing the byte cap while streaming.
+
+        A trustworthy declared ``Content-Length`` is rejected before any body is
+        read; the running total is still checked on every chunk so a chunked or
+        length-lying response cannot exceed the cap either.
+        """
+        limit = MAX_INVENTORY_BYTES
+        declared = response.headers.get("Content-Length")
+        if declared is not None:
+            try:
+                if int(declared) > limit:
+                    raise ArtifactStoreError(
+                        "ArtifactStore inventory exceeds the 5 MiB response limit"
+                    )
+            except ValueError:
+                pass  # untrustworthy header; the streaming check still applies
+        total = 0
+        chunks: list[bytes] = []
+        async for chunk in response.aiter_bytes():
+            total += len(chunk)
+            if total > limit:
+                raise ArtifactStoreError(
+                    "ArtifactStore inventory exceeds the 5 MiB response limit"
+                )
+            chunks.append(chunk)
+        return b"".join(chunks)
