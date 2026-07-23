@@ -228,7 +228,20 @@ async def test_draft_forwards_artifact_ref_and_drops_model_path():
 
     def handler(request):
         captured["body"] = json.loads(request.content)
-        return _json({"data": {"values": {"name": "x"}, "form_version": 1}, "warnings": []})
+        return _json(
+            {
+                "data": {
+                    "values": {"name": "x"},
+                    "form_version": 1,
+                    "artifact_ref": {
+                        "authority": "inventory-example-a",
+                        "artifact_id": "opaque/example.gguf#0123",
+                        "observation": "obs-1",
+                    },
+                },
+                "warnings": [],
+            }
+        )
 
     await _client(handler).create_draft(
         {
@@ -259,7 +272,20 @@ async def test_draft_preserves_warnings():
     }
 
     def handler(request):
-        return _json({"data": {"values": {}, "form_version": 1}, "warnings": [warning]})
+        return _json(
+            {
+                "data": {
+                    "values": {},
+                    "form_version": 1,
+                    "artifact_ref": {
+                        "authority": "inventory-example-a",
+                        "artifact_id": "id",
+                        "observation": "obs-old",
+                    },
+                },
+                "warnings": [warning],
+            }
+        )
 
     response = await _client(handler).create_draft(
         {"authority": "inventory-example-a", "artifact_id": "id", "observation": "obs-old"}
@@ -475,6 +501,65 @@ async def test_structured_domain_error_is_forwarded_not_raised():
     response = await _client(lambda r: _json(envelope, status=404)).read_profile("example")
     assert response.status_code == 404
     assert response.body == envelope
+
+
+@pytest.mark.asyncio
+async def test_empty_2xx_success_body_is_invalid():
+    # Only DELETE's 204 is a valid bodyless success. A 200 with no body from an
+    # endpoint that must carry an envelope is a contract violation, not an
+    # accepted empty result.
+    with pytest.raises(ProfileServiceInvalid):
+        await _client(lambda r: httpx.Response(200)).list_profiles()
+
+
+@pytest.mark.asyncio
+async def test_draft_without_form_version_is_invalid():
+    def handler(request):
+        return _json(
+            {
+                "data": {
+                    "values": {"name": "x"},
+                    "artifact_ref": {"authority": "a", "artifact_id": "b"},
+                },
+                "warnings": [],
+            }
+        )
+
+    with pytest.raises(ProfileServiceInvalid):
+        await _client(handler).create_draft({"authority": "a", "artifact_id": "b"})
+
+
+@pytest.mark.asyncio
+async def test_draft_without_artifact_ref_is_invalid():
+    def handler(request):
+        return _json({"data": {"values": {"name": "x"}, "form_version": 1}, "warnings": []})
+
+    with pytest.raises(ProfileServiceInvalid):
+        await _client(handler).create_draft({"authority": "a", "artifact_id": "b"})
+
+
+@pytest.mark.asyncio
+async def test_preview_empty_object_is_invalid():
+    # An empty ``{}`` carries neither accepted data nor rejection errors.
+    with pytest.raises(ProfileServiceInvalid):
+        await _client(lambda r: _json({})).preview({"name": "x"})
+
+
+@pytest.mark.asyncio
+async def test_preview_success_without_values_is_invalid():
+    # ``data`` present but missing ``values`` is not a valid accepted preview.
+    with pytest.raises(ProfileServiceInvalid):
+        await _client(lambda r: _json({"data": {}, "warnings": []})).preview({"name": "x"})
+
+
+@pytest.mark.asyncio
+async def test_list_entry_without_values_is_invalid():
+    # A malformed summary (no ``values``) must not pass through ``list[Any]``.
+    def handler(request):
+        return _json({"data": {"profiles": [{"id": "example"}]}, "warnings": []})
+
+    with pytest.raises(ProfileServiceInvalid):
+        await _client(handler).list_profiles()
 
 
 # -- ambient proxy refusal (real loopback server) -------------------------

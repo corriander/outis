@@ -30,7 +30,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 
 # Discovery, form, and profile documents are small. A generous ceiling still
@@ -91,8 +91,8 @@ class _ErrorEnvelope(_WireModel):
     """Every 4xx/5xx response carries this shape (an unstructured error is not
     a valid v1 response and becomes ``ProfileServiceInvalid``)."""
 
-    errors: list[_WireError]
-    warnings: list[_WireWarning] = []
+    errors: list[_WireError] = Field(min_length=1)
+    warnings: list[_WireWarning] = Field(default_factory=list)
 
 
 class _ServiceDoc(_WireModel):
@@ -105,7 +105,7 @@ class _FormDoc(_WireModel):
 
 
 class _ProfileObj(_WireModel):
-    id: Any
+    id: str
     values: dict[str, Any]
 
 
@@ -115,33 +115,50 @@ class _ProfileData(_WireModel):
 
 class _ProfileEnvelope(_WireModel):
     data: _ProfileData
-    warnings: list[_WireWarning] = []
+    warnings: list[_WireWarning] = Field(default_factory=list)
 
 
 class _ListData(_WireModel):
-    profiles: list[Any]
+    # Each entry is a full profile object, not an untyped blob: a malformed
+    # summary (missing id/values) fails validation rather than being forwarded.
+    profiles: list[_ProfileObj]
 
 
 class _ListEnvelope(_WireModel):
     data: _ListData
-    warnings: list[_WireWarning] = []
+    warnings: list[_WireWarning] = Field(default_factory=list)
 
 
 class _DraftData(_WireModel):
+    # A v1 draft echoes the form version and the artifact_ref it is bound to
+    # alongside the seeded values, so the editor knows what it is drafting for.
     values: dict[str, Any]
+    form_version: int
+    artifact_ref: dict[str, Any]
 
 
 class _DraftEnvelope(_WireModel):
     data: _DraftData
-    warnings: list[_WireWarning] = []
+    warnings: list[_WireWarning] = Field(default_factory=list)
+
+
+class _PreviewData(_WireModel):
+    values: dict[str, Any]
 
 
 class _PreviewEnvelope(_WireModel):
-    # Preview answers 200 with either ``data: {values}`` or ``data: null`` plus
-    # errors, so both keys are optional here.
-    data: Any = None
-    errors: list[_WireError] = []
-    warnings: list[_WireWarning] = []
+    # Preview answers 200 with either ``data: {values}`` (accepted) or
+    # ``data: null`` plus a non-empty ``errors`` list (rejected). An empty
+    # object carries neither and is not a valid v1 preview response.
+    data: _PreviewData | None = None
+    errors: list[_WireError] = Field(default_factory=list)
+    warnings: list[_WireWarning] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _require_data_or_errors(self) -> "_PreviewEnvelope":
+        if self.data is None and not self.errors:
+            raise ValueError("preview response must carry either data or errors")
+        return self
 
 
 def _validate(body: Any, model: type[BaseModel], what: str) -> None:
@@ -356,10 +373,17 @@ class ProfileServiceClient:
         A 2xx body is checked against the endpoint's success model; any other
         status must carry the structured error envelope. Either way the original
         dict is returned so errors, warnings, and additive fields are preserved.
+
+        A bodyless 2xx is valid only where the contract defines one -- DELETE's
+        204, signalled by ``success_model is None``. Every other endpoint has a
+        success envelope, so an empty 2xx body is validated against (and
+        rejected by) its model rather than being waved through.
         """
         if 200 <= response.status_code < 300:
-            if success_model is not None and response.body is not None:
-                _validate(response.body, success_model, "success")
+            if success_model is None:
+                return response
+            _validate(response.body if response.body is not None else {},
+                      success_model, "success")
         else:
             _validate(response.body if response.body is not None else {},
                       _ErrorEnvelope, "error")
