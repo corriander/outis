@@ -14,6 +14,7 @@ import numpy as np
 from typing import List, Dict, Any, Optional, Set
 
 from src.constants import CHROMA_DIR
+from src.index_walk import prune_index_dirs, is_indexable_file
 from pathlib import Path
 
 from src.embedding_lanes import (
@@ -35,10 +36,8 @@ DEFAULT_FILE_EXTENSIONS: Set[str] = {
 }
 
 # Tool-internal directories that match DEFAULT_FILE_EXTENSIONS but are never
-# the user's content: an Obsidian vault's .obsidian/ is minified plugin JS,
-# .git/ is repo internals, node_modules/ and __pycache__/ are build output.
-# Hidden entries are pruned by name; these cover the common non-hidden junk.
-EXCLUDED_DIR_NAMES: Set[str] = {'node_modules', '__pycache__', 'venv'}
+# Directory-walk pruning is single-sourced in src.index_walk so the vector and
+# keyword indexers apply the same hidden/junk policy and cannot drift (#5559).
 
 VECTOR_WEIGHT = 0.7
 KEYWORD_WEIGHT = 0.3
@@ -504,15 +503,13 @@ class VectorRAG:
 
         try:
             for root, dirs, files in os.walk(directory):
-                # Prune in place so os.walk never descends into hidden or
-                # junk directories (#5559). The passed-in root is exempt: a
-                # user who deliberately targets a hidden directory gets it.
-                dirs[:] = [
-                    d for d in dirs
-                    if not d.startswith('.') and d not in EXCLUDED_DIR_NAMES
-                ]
+                # Prune in place so os.walk never descends into hidden or junk
+                # directories (#5559), via the shared index_walk policy. The
+                # passed-in root is exempt: a user who deliberately targets a
+                # hidden directory gets it.
+                prune_index_dirs(dirs)
                 for fname in files:
-                    if fname.startswith('.'):
+                    if not is_indexable_file(fname):
                         continue
                     fpath = os.path.join(root, fname)
                     ext = Path(fname).suffix.lower()
