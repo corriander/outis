@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+cd "${REPO_ROOT}"
+
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/outis <command>
+
+Commands:
+  deploy      Validate config, rebuild, and recreate the Outis container
+  restart     Alias for deploy; config and code changes are always applied
+  status      Show the Outis container status
+  logs        Follow recent Outis logs
+  inventory   Exercise the configured ArtifactStore through the Outis client
+  config      Validate and display the redacted Varlock configuration
+  stop        Stop the Outis container
+EOF
+}
+
+require_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "Required command not found: $1" >&2
+    exit 127
+  fi
+}
+
+compose() {
+  docker compose "$@"
+}
+
+command="${1:-}"
+case "${command}" in
+  deploy|restart)
+    require_command varlock
+    require_command docker
+    exec varlock run --no-inject-graph -- \
+      docker compose up -d --build --force-recreate odysseus
+    ;;
+  status)
+    require_command docker
+    exec docker compose ps odysseus
+    ;;
+  logs)
+    require_command docker
+    exec docker compose logs --tail=200 -f odysseus
+    ;;
+  inventory)
+    require_command docker
+    compose exec -T odysseus python - <<'PY'
+import asyncio
+
+from artifact_store.client import ArtifactStoreClient
+
+
+async def main() -> None:
+    client = ArtifactStoreClient.from_env()
+    if client is None:
+        raise SystemExit("ArtifactStore is not configured in the Outis container")
+    document = await client.list_artifacts()
+    provider = document.get("provider") or {}
+    status = document.get("status") or {}
+    artifacts = document.get("artifacts") or []
+    name = provider.get("name") or provider.get("id") or "unknown"
+    print(f"provider={name} state={status.get('state', 'unknown')} artifacts={len(artifacts)}")
+
+
+asyncio.run(main())
+PY
+    ;;
+  config)
+    require_command varlock
+    exec varlock load
+    ;;
+  stop)
+    require_command docker
+    exec docker compose stop odysseus
+    ;;
+  -h|--help|help|"")
+    usage
+    ;;
+  *)
+    echo "Unknown command: ${command}" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

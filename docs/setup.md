@@ -9,8 +9,10 @@ This page keeps the detailed install, deployment, troubleshooting, and configura
 > see [the fork policy](../FORK.md).
 
 Defaults work out of the box: clone, run, then configure models/search/email
-inside **Settings**. Only edit `.env` for deployment-level overrides like
-`APP_BIND`, `APP_PORT`, `AUTH_ENABLED`, `DATABASE_URL`, or a pre-seeded admin password.
+inside **Settings**. Deployment configuration has a committed Varlock contract
+in `.env.schema`; put machine-specific values and secret-manager resolvers in
+the ignored `.env.local` file. Plain `.env` remains compatible with Docker
+Compose, but is not the recommended place for credentials.
 
 > **Cookbook mode:** Outis defaults to the full inherited Cookbook
 > (`OUTIS_COOKBOOK_MODE=native`), with broad Hugging Face search merged into
@@ -27,17 +29,50 @@ Contributing? See [CONTRIBUTING.md](../CONTRIBUTING.md) for setup, testing, and
 pull request guidelines.
 
 ### Docker (recommended)
+
+Install Docker Compose and [Varlock](https://varlock.dev/) first. Varlock
+validates the public configuration contract and resolves private values before
+Compose starts the container.
+
 ```bash
 git clone https://github.com/corriander/outis.git
 cd outis
-cp .env.example .env       # optional, but recommended for explicit defaults
-docker compose up -d --build
+./scripts/outis deploy
 ```
-To include optional extras in the image (PDF viewer, Office extraction; includes AGPL PyMuPDF), build with `docker compose build --build-arg INSTALL_OPTIONAL=true` before `up`.
+
+`deploy` is the canonical command after either a code or configuration change:
+it validates and injects configuration through Varlock, rebuilds the image, and
+recreates the `odysseus` service. The same wrapper provides the small operator
+surface that is otherwise easy to forget:
+
+```bash
+./scripts/outis status
+./scripts/outis logs
+./scripts/outis inventory  # exercise ArtifactStore through the container client
+./scripts/outis stop
+```
+
+For private values, create `.env.local`. Varlock auto-loads it after the public
+schema. Store secret-manager expressions rather than resolved credentials:
+
+```dotenv
+OUTIS_ARTIFACT_STORE_URL=http://host.docker.internal:8850
+OUTIS_ARTIFACT_STORE_NAME=Local models
+OUTIS_ARTIFACT_STORE_TOKEN=op(op://your-vault/your-item/your-field)
+```
+
+The token is resolved on the host and inherited by Docker Compose; Varlock and
+the secret-manager CLI do not need to be installed in the image. The public
+schema contains no private vault or item names. Run `./scripts/outis config` to
+validate the redacted configuration without starting containers.
+
+To include optional extras in the image (PDF viewer and Office extraction,
+including AGPL PyMuPDF), set `INSTALL_OPTIONAL=true` in `.env.local` and run the
+same `./scripts/outis deploy` command.
 
 Open `http://localhost:7000` when the containers are healthy. Docker Compose
 binds the web UI to `127.0.0.1` by default. If the port is taken, set
-`APP_PORT=7001` in `.env` and recreate the container. Set `APP_BIND=0.0.0.0`
+`APP_PORT=7001` in `.env.local` and redeploy. Set `APP_BIND=0.0.0.0`
 only when you intentionally want LAN/reverse-proxy access.
 
 > **On Apple Silicon (M-series) Macs:** Docker can't reach the Metal GPU, so
