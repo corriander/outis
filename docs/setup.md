@@ -42,10 +42,13 @@ cd outis
 
 `deploy` is the canonical command after either a code or configuration change:
 it validates and injects configuration through Varlock, rebuilds the image, and
-recreates the `odysseus` service. The same wrapper provides the small operator
+recreates the `odysseus` service. `restart` deliberately does not build or
+recreate anything; use it only to restart the existing container with its
+current image and configuration. The same wrapper provides the small operator
 surface that is otherwise easy to forget:
 
 ```bash
+./scripts/outis restart
 ./scripts/outis status
 ./scripts/outis logs
 ./scripts/outis inventory  # exercise ArtifactStore through the container client

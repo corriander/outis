@@ -11,7 +11,7 @@ Usage: ./scripts/outis <command>
 
 Commands:
   deploy      Validate config, rebuild, and recreate the Outis container
-  restart     Alias for deploy; config and code changes are always applied
+  restart     Restart the existing Outis container without rebuilding
   status      Show the Outis container status
   logs        Follow recent Outis logs
   inventory   Exercise the configured ArtifactStore through the Outis client
@@ -33,11 +33,15 @@ compose() {
 
 command="${1:-}"
 case "${command}" in
-  deploy|restart)
+  deploy)
     require_command varlock
     require_command docker
     exec varlock run --no-inject-graph -- \
       docker compose up -d --build --force-recreate odysseus
+    ;;
+  restart)
+    require_command docker
+    exec docker compose restart odysseus
     ;;
   status)
     require_command docker
