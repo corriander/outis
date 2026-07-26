@@ -59,7 +59,7 @@ For private values, create `.env.local`. Varlock auto-loads it after the public
 schema. Store secret-manager expressions rather than resolved credentials:
 
 ```dotenv
-OUTIS_ARTIFACT_STORE_URL=http://host.docker.internal:8850
+OUTIS_ARTIFACT_STORE_URL=http://host.docker.internal:7331
 OUTIS_ARTIFACT_STORE_NAME=Local models
 OUTIS_ARTIFACT_STORE_TOKEN=op(op://your-vault/your-item/your-field)
 ```
