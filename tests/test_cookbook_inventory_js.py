@@ -15,7 +15,7 @@ HAS_NODE = shutil.which("node") is not None
 
 def _run(expression: str):
     script = (
-        f"import {{ artifactDisplayLabels, artifactPathVariantValue, artifactPathVariantsHtml, formatArtifactBytes, filterInventoryArtifacts, sortInventoryArtifacts }} from '{MODULE.as_uri()}';"
+        f"import {{ artifactDisplayLabels, artifactPathVariantValue, artifactPathVariantsHtml, formatArtifactBytes, filterInventoryArtifacts, parseInventoryDocument, sortInventoryArtifacts }} from '{MODULE.as_uri()}';"
         f"console.log(JSON.stringify({expression}));"
     )
     proc = subprocess.run(
@@ -148,3 +148,26 @@ def test_path_variant_value_is_not_parsed_or_translated():
 @pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
 def test_missing_path_variants_render_no_extra_detail():
     assert _run("artifactPathVariantsHtml({id:'artifact-only'})") == ""
+
+
+@pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
+def test_inventory_contract_rejects_unidentified_artifacts():
+    assert _run("parseInventoryDocument({schema_version:1,artifacts:[{filename:'missing-id.gguf'}]})") is None
+
+
+@pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
+def test_path_variants_are_dynamic_and_preserve_provider_order():
+    artifact = {
+        "path_variants": [
+            {"label": "Win11", "value": r"R:\models\example.gguf"},
+            {"label": "WSL", "value": "/mnt/r/models/example.gguf"},
+            {"label": "Remote shell", "value": "models@example:/srv/models/example.gguf"},
+        ]
+    }
+    encoded = json.dumps(artifact)
+
+    html = _run(f"artifactPathVariantsHtml({encoded})")
+    assert html.index("Win11") < html.index("WSL") < html.index("Remote shell")
+    assert _run(f"artifactPathVariantValue({encoded}, 2)") == (
+        "models@example:/srv/models/example.gguf"
+    )

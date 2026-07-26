@@ -1,5 +1,24 @@
 // Provider-backed, read-only model inventory for the Cookbook.
 
+import {
+  artifactDisplayLabels,
+  artifactPathVariants,
+  artifactPathVariantValue,
+  filterInventoryArtifacts,
+  formatArtifactBytes,
+  parseInventoryDocument,
+  sortInventoryArtifacts,
+} from './generated/cookbookInventoryModel.js';
+
+export {
+  artifactDisplayLabels,
+  artifactPathVariantValue,
+  filterInventoryArtifacts,
+  formatArtifactBytes,
+  parseInventoryDocument,
+  sortInventoryArtifacts,
+};
+
 let _document = null;
 let _loading = false;
 let _available = false;
@@ -14,112 +33,13 @@ function esc(value) {
     .replaceAll("'", '&#039;');
 }
 
-export function formatArtifactBytes(value) {
-  const bytes = Number(value || 0);
-  if (!Number.isFinite(bytes) || bytes <= 0) return 'Unknown size';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const power = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
-  const amount = bytes / (1024 ** power);
-  const digits = power >= 3 ? 1 : (power === 0 ? 0 : amount < 10 ? 1 : 0);
-  return `${amount.toFixed(digits)} ${units[power]}`;
-}
-
-export function artifactSearchText(artifact) {
-  const observed = artifact?.observed || {};
-  const pathVariants = Array.isArray(artifact?.path_variants) ? artifact.path_variants : [];
-  return [
-    artifact?.filename,
-    artifact?.logical_path,
-    artifact?.display_location,
-    ...(Array.isArray(artifact?.group_path) ? artifact.group_path : []),
-    ...pathVariants.flatMap(variant => [variant?.label, variant?.value]),
-    observed.format,
-    observed.quantization,
-    observed.state,
-  ].filter(Boolean).join(' ').toLowerCase();
-}
-
-export function filterInventoryArtifacts(artifacts, query) {
-  const terms = String(query || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
-  if (!terms.length) return Array.isArray(artifacts) ? artifacts.slice() : [];
-  return (Array.isArray(artifacts) ? artifacts : []).filter(artifact => {
-    const haystack = artifactSearchText(artifact);
-    return terms.every(term => haystack.includes(term));
-  });
-}
-
-const INVENTORY_COLLATOR = new Intl.Collator(undefined, {
-  numeric: true,
-  sensitivity: 'base',
-});
-
-function _artifactDirectory(artifact) {
-  const logicalPath = String(artifact?.logical_path || '');
-  if (logicalPath) {
-    const segments = logicalPath.split('/');
-    segments.pop();
-    return segments.join(' / ');
-  }
-  const location = String(artifact?.display_location || '');
-  const filename = String(artifact?.filename || '');
-  const suffix = filename ? ` / ${filename}` : '';
-  if (suffix && location.endsWith(suffix)) return location.slice(0, -suffix.length);
-  return (Array.isArray(artifact?.group_path) ? artifact.group_path : []).join(' / ');
-}
-
-export function sortInventoryArtifacts(artifacts, mode = 'path') {
-  const items = Array.isArray(artifacts) ? artifacts.slice() : [];
-  const compare = (left, right) => {
-    const leftName = String(left?.filename || '');
-    const rightName = String(right?.filename || '');
-    const leftDirectory = _artifactDirectory(left);
-    const rightDirectory = _artifactDirectory(right);
-    const primary = mode === 'filename'
-      ? INVENTORY_COLLATOR.compare(leftName, rightName)
-      : INVENTORY_COLLATOR.compare(leftDirectory, rightDirectory);
-    if (primary) return primary;
-    const secondary = mode === 'filename'
-      ? INVENTORY_COLLATOR.compare(leftDirectory, rightDirectory)
-      : INVENTORY_COLLATOR.compare(leftName, rightName);
-    if (secondary) return secondary;
-    return INVENTORY_COLLATOR.compare(String(left?.id || ''), String(right?.id || ''));
-  };
-  return items.sort(compare);
-}
-
-export function artifactDisplayLabels(artifact, mode = 'path') {
-  const filename = String(artifact?.filename || 'Unnamed GGUF');
-  const location = String(artifact?.display_location || filename);
-  if (mode === 'filename') {
-    return { primary: filename, secondary: location };
-  }
-  const logicalPath = String(artifact?.logical_path || '');
-  const groupPath = artifact?.group_path;
-  const relativeLocation = logicalPath
-    ? logicalPath.split('/').join(' / ')
-    : Array.isArray(groupPath)
-      ? [...groupPath, filename].join(' / ')
-      : location.split(' / ').slice(1).join(' / ') || filename;
-  return { primary: relativeLocation, secondary: location };
-}
-
-export function artifactPathVariantValue(artifact, index) {
-  const variants = Array.isArray(artifact?.path_variants) ? artifact.path_variants : [];
-  const variant = variants[Number(index)];
-  return typeof variant?.value === 'string' ? variant.value : null;
-}
-
 export function artifactPathVariantsHtml(artifact) {
-  const variants = Array.isArray(artifact?.path_variants) ? artifact.path_variants : [];
-  const rows = variants.flatMap((variant, index) => {
-    if (!variant || typeof variant.label !== 'string' || typeof variant.value !== 'string') return [];
-    return [`
+  const rows = artifactPathVariants(artifact).map((variant, index) => `
       <div class="cookbook-inventory-path-variant">
         <span class="cookbook-inventory-path-label">${esc(variant.label)}</span>
         <code>${esc(variant.value)}</code>
         <button type="button" class="hwfit-gpu-btn cookbook-inventory-path-copy" data-path-variant-index="${index}" title="Copy ${esc(variant.label)} path" aria-label="Copy ${esc(variant.label)} path">Copy</button>
-      </div>`];
-  }).join('');
+      </div>`).join('');
   return rows
     ? `<div class="cookbook-inventory-paths"><h3>Concrete paths</h3>${rows}</div>`
     : '';
@@ -282,10 +202,11 @@ export async function loadInventory({ force = false, fetchImpl = globalThis.fetc
     let payload = null;
     try { payload = await response.json(); } catch {}
     if (!response.ok) throw new Error(payload?.detail || `Inventory request failed (HTTP ${response.status})`);
-    if (!payload || payload.schema_version !== 1 || !Array.isArray(payload.artifacts)) {
+    const inventoryDocument = parseInventoryDocument(payload);
+    if (!inventoryDocument) {
       throw new Error('Inventory provider returned an unsupported response');
     }
-    _document = payload;
+    _document = inventoryDocument;
     return _document;
   } catch (error) {
     _document = null;

@@ -138,6 +138,13 @@ By default the reference provider does not expose its scan root; configuring a
 path variant is an explicit operator choice. A profile service resolves an
 ArtifactRef in its own filesystem namespace.
 
+The browser treats variant labels as provider-defined display text rather than
+an operating-system enum: `WSL`, `Win11`, remote-shell contexts, and future
+labels all use the same rendering and copy behavior. Contract normalization and
+the pure inventory view model live in `frontend/cookbookInventoryModel.ts`;
+`npm run build:inventory` emits the committed no-build-browser module consumed
+by the handwritten DOM adapter.
+
 This repository includes a small reference provider implemented with the
 Python standard library. A WSL-hosted example is:
 
@@ -175,6 +182,27 @@ This policy governs Cookbook-specific HTTP routes, frontend controls, and agent
 tools. It is not an agent sandbox: a separately authorised generic shell or
 administrative API remains a distinct privileged surface and can operate on the
 host independently of Cookbook capabilities.
+
+## Frontend evolution boundary
+
+The inherited Cookbook frontend is imperative browser JavaScript concentrated
+in `static/js/cookbook.js`. Existing Launch, Download, Dependencies, and
+Settings behavior remains supported, but substantial provider-backed authoring
+must not extend that module into the source of truth for profiles.
+
+Profile authoring should enter as an isolated TypeScript frontend module, with
+its own build and test boundary, over the `ArtifactStore` and `ProfileService`
+contracts. Its domain model owns profile identity, shared values, variants,
+validation, and deployment intent. INI files and other runtime formats are
+projections of that model rather than records the browser duplicates and edits
+directly. Local inventory, remote catalogue results, authored profiles, and
+runtime state may later share presentation components, but remain distinct
+domain objects.
+
+This boundary does not require rewriting the inherited Cookbook before useful
+provider-backed slices can ship. Read-only inventory can remain a separate
+working tab while the typed authoring surface and its final navigation are
+designed.
 
 ## Broad Hugging Face discovery
 
