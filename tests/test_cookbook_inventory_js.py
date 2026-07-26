@@ -15,7 +15,7 @@ HAS_NODE = shutil.which("node") is not None
 
 def _run(expression: str):
     script = (
-        f"import {{ artifactDisplayLabels, artifactPathVariantValue, artifactPathVariantsHtml, formatArtifactBytes, filterInventoryArtifacts, parseInventoryDocument, sortInventoryArtifacts }} from '{MODULE.as_uri()}';"
+        f"import {{ artifactDisplayLabels, artifactPathVariantValue, artifactPathVariantsHtml, artifactSplitLabel, formatArtifactBytes, filterInventoryArtifacts, inventorySourceIssues, parseInventoryDocument, sortInventoryArtifacts }} from '{MODULE.as_uri()}';"
         f"console.log(JSON.stringify({expression}));"
     )
     proc = subprocess.run(
@@ -153,6 +153,64 @@ def test_missing_path_variants_render_no_extra_detail():
 @pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
 def test_inventory_contract_rejects_unidentified_artifacts():
     assert _run("parseInventoryDocument({schema_version:1,artifacts:[{filename:'missing-id.gguf'}]})") is None
+
+
+@pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
+def test_split_label_reports_a_known_expected_part_count():
+    artifact = {"observed": {"split": {"parts_present": 1, "parts_expected": 3}}}
+    assert _run(f"artifactSplitLabel({json.dumps(artifact)})") == "1/3 parts"
+
+
+@pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
+def test_absent_expected_part_count_is_unknown_not_zero():
+    """A provider omits parts_expected when the parts disagree about the total.
+
+    Coercing that absence to zero renders "2/0 parts", which asserts a total the
+    provider never claimed.
+    """
+    artifact = {"observed": {"split": {"parts_present": 2}}}
+    assert _run(f"artifactSplitLabel({json.dumps(artifact)})") == "2/? parts"
+
+
+@pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
+def test_artifacts_without_split_metadata_have_no_split_label():
+    assert _run("artifactSplitLabel({observed:{size_bytes:1024}})") == ""
+
+
+@pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
+def test_degraded_sources_surface_the_provider_supplied_reason():
+    document = {
+        "schema_version": 1,
+        "artifacts": [],
+        "status": {
+            "state": "partial",
+            "sources": [
+                {"id": "a", "label": "Ready source", "state": "ready"},
+                {
+                    "id": "b",
+                    "label": "Blocked source",
+                    "state": "unreachable",
+                    "error": "permission denied",
+                },
+            ],
+        },
+    }
+    issues = _run(f"inventorySourceIssues({json.dumps(document)})")
+    assert issues == [
+        {"label": "Blocked source", "state": "unreachable", "error": "permission denied"}
+    ]
+
+
+@pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
+def test_degraded_source_without_a_reason_is_still_reported():
+    document = {
+        "schema_version": 1,
+        "artifacts": [],
+        "status": {"sources": [{"id": "b", "state": "partial"}]},
+    }
+    assert _run(f"inventorySourceIssues({json.dumps(document)})") == [
+        {"label": "b", "state": "partial", "error": ""}
+    ]
 
 
 @pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")

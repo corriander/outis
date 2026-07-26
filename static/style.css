@@ -22544,6 +22544,41 @@ body.gallery-selecting .gallery-dl-btn,
   opacity: 0.9;
 }
 
+.cookbook-inventory-issues:empty {
+  display: none;
+}
+
+.cookbook-inventory-issues {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 1px 6px;
+}
+
+.cookbook-inventory-issue {
+  align-items: center;
+  background: var(--bg-2, rgba(127, 127, 127, 0.08));
+  border-left: 2px solid var(--red);
+  border-radius: 3px;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 10px;
+  gap: 6px;
+  padding: 5px 8px;
+}
+
+.cookbook-inventory-issue-source {
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.cookbook-inventory-issue-error {
+  flex: 1;
+  min-width: 0;
+  opacity: 0.7;
+  overflow-wrap: anywhere;
+}
+
 .cookbook-inventory-list {
   display: flex;
   flex: 1;

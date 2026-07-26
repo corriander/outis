@@ -4,8 +4,10 @@ import {
   artifactDisplayLabels,
   artifactPathVariants,
   artifactPathVariantValue,
+  artifactSplitLabel,
   filterInventoryArtifacts,
   formatArtifactBytes,
+  inventorySourceIssues,
   parseInventoryDocument,
   sortInventoryArtifacts,
 } from './generated/cookbookInventoryModel.js';
@@ -13,8 +15,10 @@ import {
 export {
   artifactDisplayLabels,
   artifactPathVariantValue,
+  artifactSplitLabel,
   filterInventoryArtifacts,
   formatArtifactBytes,
+  inventorySourceIssues,
   parseInventoryDocument,
   sortInventoryArtifacts,
 };
@@ -56,10 +60,7 @@ function _artifactHtml(artifact, sortMode) {
   const labels = artifactDisplayLabels(artifact, sortMode);
   const quant = observed.quantization || 'Unknown quant';
   const state = observed.state || 'unknown';
-  const split = observed.split;
-  const splitLabel = split
-    ? `${Number(split.parts_present || 0)}/${Number(split.parts_expected || 0)} parts`
-    : '';
+  const splitLabel = artifactSplitLabel(artifact);
   const fileRows = (Array.isArray(artifact?.files) ? artifact.files : []).map(file => (
     `<div class="cookbook-inventory-file"><span>${esc(file.filename)}</span><span>${esc(formatArtifactBytes(file.size_bytes))}</span></div>`
   )).join('');
@@ -137,9 +138,23 @@ export function inventoryPanelHtml({ available = false, provider = null } = {}) 
           <span id="cookbook-inventory-provider">${providerText}</span>
         </div>
         <div id="cookbook-inventory-status" class="cookbook-inventory-status">${available ? 'Open this tab to load the inventory.' : 'Configure an external ArtifactStore provider to enumerate local GGUFs.'}</div>
+        <div id="cookbook-inventory-issues" class="cookbook-inventory-issues"></div>
         <div id="cookbook-inventory-list" class="cookbook-inventory-list"></div>
       </div>
     </div>`;
+}
+
+// Providers may explain why a source is degraded. Surfacing the state without
+// the reason leaves an operator with nothing actionable, so render each one.
+function _renderSourceIssues(issues) {
+  const host = document.getElementById('cookbook-inventory-issues');
+  if (!host) return;
+  host.innerHTML = (issues || []).map(issue => `
+      <div class="cookbook-inventory-issue">
+        <span class="cookbook-inventory-issue-source">${esc(issue.label)}</span>
+        <span class="cookbook-inventory-chip cookbook-inventory-state-${esc(issue.state)}">${esc(issue.state)}</span>
+        ${issue.error ? `<span class="cookbook-inventory-issue-error">${esc(issue.error)}</span>` : ''}
+      </div>`).join('');
 }
 
 function _render() {
@@ -150,6 +165,7 @@ function _render() {
   if (!_available) {
     list.innerHTML = '';
     count.textContent = '';
+    _renderSourceIssues([]);
     status.textContent = 'Configure an external ArtifactStore provider to enumerate local GGUFs.';
     status.classList.add('is-empty');
     return;
@@ -170,7 +186,8 @@ function _render() {
   const providerEl = document.getElementById('cookbook-inventory-provider');
   if (providerEl) providerEl.textContent = providerName ? `Provider: ${providerName}` : 'External provider';
   const providerState = _document.status?.state || 'ready';
-  const unavailableSources = (_document.status?.sources || []).filter(source => source?.state !== 'ready');
+  const unavailableSources = inventorySourceIssues(_document);
+  _renderSourceIssues(unavailableSources);
   if (providerState !== 'ready') {
     status.textContent = unavailableSources.length
       ? `${artifacts.length} shown · ${unavailableSources.length} source${unavailableSources.length === 1 ? '' : 's'} unavailable or partial.`
@@ -213,6 +230,7 @@ export async function loadInventory({ force = false, fetchImpl = globalThis.fetc
     const status = document.getElementById('cookbook-inventory-status');
     const list = document.getElementById('cookbook-inventory-list');
     if (list) list.innerHTML = '';
+    _renderSourceIssues([]);
     if (status) {
       status.textContent = error?.message || 'Inventory provider is unavailable.';
       status.classList.add('is-error');

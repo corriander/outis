@@ -53,8 +53,18 @@ export interface InventoryProvider {
 }
 
 export interface InventorySource {
+  id?: string;
+  label?: string;
   state?: string;
+  /** Provider-supplied reason a source is not ready. Optional and additive. */
+  error?: string;
   [key: string]: unknown;
+}
+
+export interface InventorySourceIssue {
+  label: string;
+  state: string;
+  error: string;
 }
 
 export interface InventoryStatus {
@@ -105,6 +115,45 @@ export function parseInventoryDocument(value: unknown): InventoryDocument | null
     return null;
   }
   return value as InventoryDocument;
+}
+
+/**
+ * Non-ready sources, carrying the provider's own reason when it supplies one.
+ *
+ * A provider may omit `error`; the state alone is still reportable. The reason
+ * is provider-authored text and is never parsed — only displayed.
+ */
+export function inventorySourceIssues(value: unknown): InventorySourceIssue[] {
+  if (!isRecord(value)) return [];
+  const status = isRecord(value.status) ? value.status : {};
+  const sources = Array.isArray(status.sources) ? status.sources : [];
+  return sources.flatMap((source) => {
+    if (!isRecord(source)) return [];
+    const state = stringOrEmpty(source.state);
+    if (state === "ready") return [];
+    const label = stringOrEmpty(source.label)
+      || stringOrEmpty(source.id)
+      || "Unnamed source";
+    return [{ label, state: state || "unknown", error: stringOrEmpty(source.error) }];
+  });
+}
+
+/**
+ * Split-part chip text.
+ *
+ * `parts_expected` is optional: a provider omits it when the observed parts
+ * disagree about the total, so no single expected count exists. Render `?`
+ * rather than coercing the absent value to zero and claiming "N/0 parts".
+ */
+export function artifactSplitLabel(artifact: unknown): string {
+  const observed = observationOf(artifact);
+  if (!isRecord(observed.split)) return "";
+  const present = Number(observed.split.parts_present ?? 0);
+  if (!Number.isFinite(present) || present <= 0) return "";
+  const expected = Number(observed.split.parts_expected);
+  return Number.isFinite(expected) && expected > 0
+    ? `${present}/${expected} parts`
+    : `${present}/? parts`;
 }
 
 export function artifactPathVariants(artifact: unknown): ArtifactPathVariant[] {
