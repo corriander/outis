@@ -117,9 +117,15 @@ An example envelope is:
 
 `status.state` is `ready`, `partial`, or `unreachable`; an artifact's
 `observed.state` is `ready` or `incomplete`. Split artifacts also include an
-`observed.split` object with `parts_present` and `parts_expected`. Clients must
-treat unknown additive fields as optional so provenance can be added later
-without making it a prerequisite for inventory.
+`observed.split` object with `parts_present` and, when the provider can
+determine it, `parts_expected`. `parts_expected` is **optional**: a provider
+omits it when the observed parts disagree about the total, so no single expected
+count exists. Clients must render that absence as unknown rather than as zero.
+
+A source entry in `status.sources` may carry an optional `error` string
+explaining why it is not `ready`. Outis displays it verbatim and never parses
+it. Clients must treat unknown additive fields as optional so provenance can be
+added later without making it a prerequisite for inventory.
 
 `provider.id` is a stable authority for one configured provider instance;
 `provider.class`, when present, is only an implementation hint. An ArtifactRef
