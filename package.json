@@ -1,9 +1,16 @@
 {
+  "name": "outis",
+  "private": true,
   "repository": {
     "type": "git",
     "url": "https://github.com/corriander/outis.git"
   },
+  "scripts": {
+    "build:inventory": "tsc -p tsconfig.inventory.json",
+    "check:inventory": "tsc -p tsconfig.inventory.json --noEmit"
+  },
   "devDependencies": {
-    "@antithesishq/bombadil": "^0.6.1"
+    "@antithesishq/bombadil": "^0.6.1",
+    "typescript": "^7.0.2"
   }
 }

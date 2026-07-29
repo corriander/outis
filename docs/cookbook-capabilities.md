@@ -18,6 +18,9 @@ The version 1 document contains four independently meaningful groups:
 - `runtime_controller`: query status, start or stop a runtime, and read logs.
 
 Each group names its provider, if any, and exposes operation-level booleans.
+When a deployment mixes providers within one group, `operation_providers`
+identifies the provider for each operation. For example, native acquisition can
+remain available while inventory enumeration comes from an external store.
 Backend enforcement is authoritative: operations whose capability is absent
 return HTTP 501 instead of falling through to the inherited local, SSH, tmux,
 PowerShell, or container implementations. The frontend keeps rendering the
@@ -34,16 +37,150 @@ elsewhere) until the replacement lands.
 
 `OUTIS_COOKBOOK_MODE=external` declares a deployment where artifact storage,
 profiles, and runtime lifecycle are owned by external providers. With no
-providers implemented yet, external mode is a deliberately reduced
-catalogue-only surface (browse and broad search; operational routes 501) and
-is not the recommended configuration. It becomes the intended default only
-when provider-backed capabilities reach parity with the inherited browser.
-Future providers should implement one or more capability groups without making
+providers configured, external mode is a deliberately reduced catalogue-only
+surface (browse and broad search; operational routes 501). Configuring an
+ArtifactStore adds read-only inventory without enabling acquisition, profile,
+or runtime operations. External mode becomes the intended default only when
+provider-backed capabilities reach parity with the inherited browser. Future
+providers should implement one or more capability groups without making
 unrelated groups appear available.
 
 Inherited hardware-fit routes are part of `runtime_controller.status` because
 they inspect a prospective execution host and may invoke SSH. They are not
 available in external mode.
+
+## External GGUF inventory
+
+Set `OUTIS_ARTIFACT_STORE_URL` to make the Cookbook's **Inventory** tab consume
+an external ArtifactStore. Outis calls:
+
+```text
+GET <provider>/v1/artifacts
+```
+
+The version 1 inventory envelope contains a provider authority, provider/source
+status, and artifacts with an authority-scoped stable ID, source ID, logical
+relative path, observation token, observed filename, size, modification time,
+format, quantisation when it can be derived from the filename, and readiness
+state. The first format adapter is intentionally GGUF-only. It groups complete
+split GGUF sets into one artifact and reports missing or temporary parts as
+incomplete. Other files and model stores, provenance, remote-catalogue matching,
+acquisition, and mutation are outside this first slice.
+
+An example envelope is:
+
+```json
+{
+  "schema_version": 1,
+  "provider": {
+    "id": "inventory-example-a",
+    "name": "Directory inventory",
+    "class": "directory"
+  },
+  "status": {
+    "state": "ready",
+    "observed_at": "2026-01-01T12:00:00Z",
+    "sources": [
+      {"id": "models", "label": "Local models", "state": "ready", "artifact_count": 1}
+    ]
+  },
+  "artifacts": [
+    {
+      "id": "models:family/example-Q4_K_M.gguf:0123456789ab",
+      "source_id": "models",
+      "observation": "0123456789abcdef",
+      "filename": "example-Q4_K_M.gguf",
+      "logical_path": "family/example-Q4_K_M.gguf",
+      "display_location": "Local models / family / example-Q4_K_M.gguf",
+      "group_path": ["family"],
+      "path_variants": [
+        {"label": "Runtime host", "value": "/srv/models/family/example-Q4_K_M.gguf"}
+      ],
+      "observed": {
+        "size_bytes": 4294967296,
+        "modified_at": "2026-01-01T11:00:00Z",
+        "format": "gguf",
+        "quantization": "Q4_K_M",
+        "state": "ready"
+      },
+      "files": [
+        {
+          "filename": "example-Q4_K_M.gguf",
+          "size_bytes": 4294967296,
+          "modified_at": "2026-01-01T11:00:00Z"
+        }
+      ]
+    }
+  ]
+}
+```
+
+`status.state` is `ready`, `partial`, or `unreachable`; an artifact's
+`observed.state` is `ready` or `incomplete`. Split artifacts also include an
+`observed.split` object with `parts_present` and, when the provider can
+determine it, `parts_expected`. `parts_expected` is **optional**: a provider
+omits it when the observed parts disagree about the total, so no single expected
+count exists. Clients must render that absence as unknown rather than as zero.
+
+A source entry in `status.sources` may carry an optional `error` string
+explaining why it is not `ready`. Outis displays it verbatim and never parses
+it. Clients must treat unknown additive fields as optional so provenance can be
+added later without making it a prerequisite for inventory.
+
+`provider.id` is a stable authority for one configured provider instance;
+`provider.class`, when present, is only an implementation hint. An ArtifactRef
+is `{authority: provider.id, artifact_id: artifact.id}` and treats the artifact
+ID as opaque. `source_id` identifies the provider-owned source without requiring
+a client to parse the artifact ID. The stable identity remains unchanged when a
+source label changes. `observation` is separate and changes when the provider
+observes a replacement at that identity.
+
+`logical_path` is the structured, `/`-separated path used for ordinary browsing.
+`display_location` may add a source label. A provider may also publish zero or
+more `path_variants` as `{label, value}` pairs. Outis displays and copies each
+value exactly as supplied, but never parses, translates, joins, reconstructs, or
+submits it as identity. A provider that omits path variants remains fully usable.
+By default the reference provider does not expose its scan root; configuring a
+path variant is an explicit operator choice. A profile service resolves an
+ArtifactRef in its own filesystem namespace.
+
+The browser treats variant labels as provider-defined display text rather than
+an operating-system enum: `WSL`, `Win11`, remote-shell contexts, and future
+labels all use the same rendering and copy behavior. Contract normalization and
+the pure inventory view model live in `frontend/cookbookInventoryModel.ts`;
+`npm run build:inventory` emits the committed no-build-browser module consumed
+by the handwritten DOM adapter.
+
+This repository includes a small reference provider implemented with the
+Python standard library. A WSL-hosted example is:
+
+```bash
+export OUTIS_ARTIFACT_PROVIDER_TOKEN='replace-with-a-long-random-value'
+python -m artifact_store.directory_provider \
+  --root models=/mnt/d/models \
+  --label 'models=Local models' \
+  --provider-id inventory-example-a \
+  --path-variant 'models:Runtime host=/srv/models/{rel}' \
+  --bind 0.0.0.0 \
+  --port 7331
+```
+
+Use the same secret as `OUTIS_ARTIFACT_STORE_TOKEN` in Outis and configure the
+URL reachable from the Outis container, commonly
+`http://host.docker.internal:7331`. The provider binds to loopback by default
+and refuses a non-loopback bind unless `OUTIS_ARTIFACT_PROVIDER_TOKEN` is set.
+Multiple `--root ID=PATH`, `--label ID=LABEL`, and
+`--path-variant ROOT_ID:LABEL=TEMPLATE` options are supported. Variant templates
+may use `{path}` for the observed host path, `{root}` for the configured root,
+and `{rel}` for the logical relative path. Root IDs and provider IDs must remain
+stable because together they establish ArtifactRef identity; labels may be
+changed without changing IDs.
+
+The command-line provider deliberately has no default authority:
+`--provider-id` is required so two independently configured instances cannot
+silently publish the same ArtifactRef namespace. Direct Python callers of
+`inventory_document()` retain the historical `directory` default for source
+compatibility only; network providers must not rely on it.
 
 ## Boundary scope
 
@@ -51,6 +188,27 @@ This policy governs Cookbook-specific HTTP routes, frontend controls, and agent
 tools. It is not an agent sandbox: a separately authorised generic shell or
 administrative API remains a distinct privileged surface and can operate on the
 host independently of Cookbook capabilities.
+
+## Frontend evolution boundary
+
+The inherited Cookbook frontend is imperative browser JavaScript concentrated
+in `static/js/cookbook.js`. Existing Launch, Download, Dependencies, and
+Settings behavior remains supported, but substantial provider-backed authoring
+must not extend that module into the source of truth for profiles.
+
+Profile authoring should enter as an isolated TypeScript frontend module, with
+its own build and test boundary, over the `ArtifactStore` and `ProfileService`
+contracts. Its domain model owns profile identity, shared values, variants,
+validation, and deployment intent. INI files and other runtime formats are
+projections of that model rather than records the browser duplicates and edits
+directly. Local inventory, remote catalogue results, authored profiles, and
+runtime state may later share presentation components, but remain distinct
+domain objects.
+
+This boundary does not require rewriting the inherited Cookbook before useful
+provider-backed slices can ship. Read-only inventory can remain a separate
+working tab while the typed authoring surface and its final navigation are
+designed.
 
 ## Broad Hugging Face discovery
 

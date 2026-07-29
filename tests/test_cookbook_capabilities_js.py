@@ -36,6 +36,8 @@ def test_external_mode_keeps_browse_and_removes_native_actions():
 
     assert policy == {
         "browse": True,
+        "inventory": False,
+        "inventoryProvider": None,
         "download": False,
         "profiles": False,
         "launch": False,
@@ -50,3 +52,20 @@ def test_missing_capability_document_fails_closed():
     assert policy["browse"] is True
     assert policy["download"] is False
     assert policy["launch"] is False
+
+
+@pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
+def test_external_artifact_provider_enables_inventory_only():
+    policy = _run("cookbookUiPolicy({mode:'native',capabilities:{catalogue:{browse:true},artifact_store:{provider:'directory',list:true,acquire:true,operation_providers:{list:'directory',acquire:'odysseus-native'}},profile_service:{write:true},runtime_controller:{start:true}}})")
+
+    assert policy["inventory"] is True
+    assert policy["inventoryProvider"] == "directory"
+    assert policy["download"] is True
+
+
+@pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
+def test_native_cache_listing_is_not_presented_as_external_inventory():
+    policy = _run("cookbookUiPolicy({mode:'native',capabilities:{artifact_store:{provider:'odysseus-native',list:true,acquire:true},profile_service:{write:true},runtime_controller:{start:true}}})")
+
+    assert policy["inventory"] is False
+    assert policy["inventoryProvider"] is None

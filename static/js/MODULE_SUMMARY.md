@@ -148,6 +148,8 @@ The largest and most central subsystem. Chat submission → backend SSE → prog
 | Module | Responsibility |
 |---|---|
 | **`cookbook.js`** | Cookbook main UI: hardware fitting, presets, action panels. |
+| **`cookbookInventory.js`** | Thin DOM adapter for the external artifact inventory, including dynamic provider-labelled path copy controls. |
+| **`generated/cookbookInventoryModel.js`** | Committed browser build of the typed inventory contract and pure view model in `frontend/cookbookInventoryModel.ts`; regenerate with `npm run build:inventory`. |
 | **`cookbook-hwfit.js`** / **`cookbook-diagnosis.js`** / **`cookbook-deps-recipes.js`** | Hardware-fit scoring, dependency diagnosis, recipe handling. |
 | **`cookbookDownload.js`** / **`cookbookServe.js`** / **`cookbookRunning.js`** / **`cookbookSchedule.js`** / **`cookbookPorts.js`** / **`cookbookProgressSignal.js`** | Model download/serve flow, running job cards, scheduling, port detection, and progress computation. |
 

@@ -18,6 +18,45 @@ INTERNAL_TOOL_HEADER = "X-Odysseus-Internal-Token"
 # Pseudo-username on in-process tool-loopback requests; require_admin trusts it and it is reserved.
 INTERNAL_TOOL_USER = "internal-tool"
 
+# Headers that prove a request was forwarded by a proxy/tunnel (cloudflared,
+# nginx, Caddy, Tailscale Funnel, …). cloudflared connects to the app FROM
+# 127.0.0.1, so without this check every tunneled request would look like
+# loopback and could bypass auth.
+PROXY_FWD_HEADERS = (
+    "cf-connecting-ip", "cf-ray", "cf-visitor",
+    "x-forwarded-for", "x-forwarded-host", "x-real-ip", "forwarded",
+)
+
+
+def is_trusted_loopback(request: Request) -> bool:
+    """True ONLY for a DIRECT loopback connection with no proxy/tunnel
+    forwarding headers. A bare ``client.host in ('127.0.0.1','::1')`` check is
+    unsafe behind a Cloudflare tunnel / reverse proxy: those connect from
+    loopback, so a remote visitor would otherwise inherit local trust and slip
+    past LOCALHOST_BYPASS or spoof the internal-tool path. Odysseus's own
+    in-process agent loopback calls carry none of these headers, so they still
+    qualify.
+
+    Lives here rather than in app.py so AuthMiddleware and require_admin share
+    ONE definition — a second copy of this rule is a security bug waiting to
+    drift.
+    """
+    client = getattr(request, "client", None)
+    host = client.host if client else None
+    if host not in ("127.0.0.1", "::1"):
+        return False
+    for header in PROXY_FWD_HEADERS:
+        if request.headers.get(header):
+            return False
+    return True
+
+
+def _localhost_bypass_enabled() -> bool:
+    """True when the operator opted into the dev-only loopback auth bypass.
+    Mirrors the parse in app.py and src/auth_helpers.py so the call sites
+    agree on what "on" means."""
+    return os.getenv("LOCALHOST_BYPASS", "false").lower() == "true"
+
 
 def is_cors_preflight(method: str, headers) -> bool:
     """True for a genuine CORS preflight: an OPTIONS request carrying the
@@ -48,6 +87,14 @@ def require_admin(request: Request):
 
     auth_mgr = getattr(request.app.state, "auth_manager", None)
     if os.getenv("AUTH_ENABLED", "true").lower() == "false":
+        return
+    # Documented dev bypass. AuthMiddleware admits these requests without a
+    # session cookie but sets no current_user, and src.auth_helpers.require_user
+    # already mirrors it for owner-scoped routes; without the same treatment
+    # here every admin-gated route 403s under the switch that exists to make
+    # local testing possible. The trusted-loopback test is the strict one, so a
+    # tunneled/proxied caller can never inherit admin this way.
+    if _localhost_bypass_enabled() and is_trusted_loopback(request):
         return
     if not auth_mgr or not auth_mgr.is_configured:
         raise HTTPException(403, "Admin only")

@@ -67,7 +67,7 @@ from core.constants import (
     REQUEST_TIMEOUT, OPENAI_API_KEY, AUTH_FILE,
 )
 from core.database import SessionLocal, ApiToken
-from core.middleware import SecurityHeadersMiddleware, is_cors_preflight
+from core.middleware import SecurityHeadersMiddleware, is_cors_preflight, is_trusted_loopback
 from core.auth import AuthManager, normalize_known_username
 from core.exceptions import (
     SessionNotFoundError, InvalidFileUploadError,
@@ -328,30 +328,8 @@ if AUTH_ENABLED:
         _token_cache.update(new_map)
         app.state._token_cache_dirty = False
 
-    # Headers that prove a request was forwarded by a proxy/tunnel (cloudflared,
-    # nginx, Caddy, Tailscale Funnel, …). cloudflared connects to the app FROM
-    # 127.0.0.1, so without this check every tunneled request would look like
-    # loopback and could bypass auth.
-    _PROXY_FWD_HEADERS = (
-        "cf-connecting-ip", "cf-ray", "cf-visitor",
-        "x-forwarded-for", "x-forwarded-host", "x-real-ip", "forwarded",
-    )
-
-    def _is_trusted_loopback(request: Request) -> bool:
-        """True ONLY for a DIRECT loopback connection with no proxy/tunnel
-        forwarding headers. A bare ``client.host in ('127.0.0.1','::1')`` check is
-        unsafe behind a Cloudflare tunnel / reverse proxy: those connect from
-        loopback, so a remote visitor would otherwise inherit local trust and
-        slip past LOCALHOST_BYPASS or spoof the internal-tool path. Odysseus's own
-        in-process agent loopback calls carry none of these headers, so they still
-        qualify."""
-        host = request.client.host if request.client else None
-        if host not in ("127.0.0.1", "::1"):
-            return False
-        for _h in _PROXY_FWD_HEADERS:
-            if request.headers.get(_h):
-                return False
-        return True
+    # The trusted-loopback rule lives in core.middleware (imported above) so
+    # this middleware and require_admin share one definition and cannot drift.
 
     class AuthMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next):
@@ -374,7 +352,7 @@ if AUTH_ENABLED:
             try:
                 from core.middleware import INTERNAL_TOOL_HEADER, INTERNAL_TOOL_TOKEN as _ITT, INTERNAL_TOOL_USER
                 _hdr = request.headers.get(INTERNAL_TOOL_HEADER)
-                if _hdr and secrets.compare_digest(_hdr, _ITT) and _is_trusted_loopback(request):
+                if _hdr and secrets.compare_digest(_hdr, _ITT) and is_trusted_loopback(request):
                     # Impersonation: when the agent's loopback call sets
                     # X-Odysseus-Owner, attribute the request to that user only
                     # if they exist. Authorization checks remain separate; this
@@ -391,10 +369,10 @@ if AUTH_ENABLED:
                 logger.warning("Internal tool auth header check failed", exc_info=_e)
             # Allow DIRECT localhost requests (internal service calls from
             # heartbeats etc.). Tunnel/proxy-forwarded requests are excluded by
-            # _is_trusted_loopback so LOCALHOST_BYPASS can't be abused over a
+            # is_trusted_loopback so LOCALHOST_BYPASS can't be abused over a
             # Cloudflare tunnel / reverse proxy. Keep LOCALHOST_BYPASS=false for
             # network-exposed deployments regardless.
-            if LOCALHOST_BYPASS and _is_trusted_loopback(request):
+            if LOCALHOST_BYPASS and is_trusted_loopback(request):
                 return await call_next(request)
             if not auth_manager.is_configured:
                 # No users yet — redirect to login for first-time setup
@@ -778,6 +756,10 @@ app.include_router(setup_shell_routes())
 # Cookbook (model download/serve/cache, cookbook state sync)
 from routes.cookbook_routes import setup_cookbook_routes
 app.include_router(setup_cookbook_routes())
+
+# Provider-backed read-only model artifact inventory
+from routes.artifact_routes import setup_artifact_routes
+app.include_router(setup_artifact_routes())
 
 from routes.workspace_routes import setup_workspace_routes
 app.include_router(setup_workspace_routes())

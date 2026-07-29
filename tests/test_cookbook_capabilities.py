@@ -9,6 +9,7 @@ def test_native_mode_is_the_default(monkeypatch):
     """Constructive-fork rule: the inherited Cookbook stays until provider-backed
     replacements reach parity, so an unconfigured deployment gets native."""
     monkeypatch.delenv("OUTIS_COOKBOOK_MODE", raising=False)
+    monkeypatch.delenv("OUTIS_ARTIFACT_STORE_URL", raising=False)
 
     from src.cookbook_capabilities import cookbook_capabilities
 
@@ -20,6 +21,7 @@ def test_native_mode_is_the_default(monkeypatch):
 
 def test_external_mode_is_catalogue_only(monkeypatch):
     monkeypatch.setenv("OUTIS_COOKBOOK_MODE", "external")
+    monkeypatch.delenv("OUTIS_ARTIFACT_STORE_URL", raising=False)
 
     from src.cookbook_capabilities import cookbook_capabilities
 
@@ -32,12 +34,14 @@ def test_external_mode_is_catalogue_only(monkeypatch):
         "inspect": True,
     }
     assert document["capabilities"]["artifact_store"]["acquire"] is False
+    assert document["capabilities"]["artifact_store"]["list"] is False
     assert document["capabilities"]["profile_service"]["write"] is False
     assert document["capabilities"]["runtime_controller"]["start"] is False
 
 
 def test_native_mode_preserves_upstream_operations(monkeypatch):
     monkeypatch.setenv("OUTIS_COOKBOOK_MODE", "native")
+    monkeypatch.delenv("OUTIS_ARTIFACT_STORE_URL", raising=False)
 
     from src.cookbook_capabilities import cookbook_capabilities
 
@@ -48,6 +52,23 @@ def test_native_mode_preserves_upstream_operations(monkeypatch):
     assert capabilities["profile_service"]["write"] is True
     assert capabilities["runtime_controller"]["start"] is True
     assert capabilities["runtime_controller"]["stop"] is True
+
+
+@pytest.mark.parametrize("mode", ["native", "external"])
+def test_configured_external_inventory_is_additive(monkeypatch, mode):
+    monkeypatch.setenv("OUTIS_COOKBOOK_MODE", mode)
+    monkeypatch.setenv("OUTIS_ARTIFACT_STORE_URL", "http://host.docker.internal:7331")
+    monkeypatch.setenv("OUTIS_ARTIFACT_STORE_NAME", "directory")
+
+    artifact_store = __import__(
+        "src.cookbook_capabilities", fromlist=["cookbook_capabilities"]
+    ).cookbook_capabilities()["capabilities"]["artifact_store"]
+
+    assert artifact_store["list"] is True
+    assert artifact_store["provider"] == "directory"
+    assert artifact_store["operation_providers"]["list"] == "directory"
+    assert artifact_store["acquire"] is (mode == "native")
+    assert artifact_store["delete"] is (mode == "native")
 
 
 def test_unsupported_native_operation_fails_closed(monkeypatch):
