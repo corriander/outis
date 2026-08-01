@@ -14,10 +14,10 @@ def setup_artifact_routes() -> APIRouter:
     async def list_artifacts(request: Request):
         require_admin(request)
         require_cookbook_capability("artifact_store", "list")
-        client = ArtifactStoreClient.from_env()
-        if client is None:
-            raise HTTPException(501, "No external ArtifactStore provider is configured")
         try:
+            client = ArtifactStoreClient.from_config()
+            if client is None:
+                raise HTTPException(501, "No external ArtifactStore provider is configured")
             return await client.list_artifacts()
         except ArtifactStoreUnavailable as exc:
             raise HTTPException(502, str(exc)) from exc

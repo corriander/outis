@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 import json
-import os
-from urllib.parse import urlsplit, urlunsplit
 
 import httpx
+
+from artifact_store.config import (
+    ArtifactStoreConfiguration,
+    ArtifactStoreConfigurationError,
+    DEFAULT_PROVIDER_NAME,
+    persisted_configuration_present,
+    resolve_artifact_store_configuration,
+    validated_base_url,
+)
 
 
 # The inventory document is small in practice. This ceiling still refuses a
@@ -25,32 +32,21 @@ class ArtifactStoreUnavailable(ArtifactStoreError):
 
 
 def configured_artifact_store_name() -> str:
-    return os.getenv("OUTIS_ARTIFACT_STORE_NAME", "external-artifact-store").strip() or "external-artifact-store"
+    try:
+        configuration = resolve_artifact_store_configuration()
+    except ArtifactStoreConfigurationError:
+        return DEFAULT_PROVIDER_NAME
+    return configuration.name if configuration else DEFAULT_PROVIDER_NAME
 
 
 def artifact_store_configured() -> bool:
-    return bool(os.getenv("OUTIS_ARTIFACT_STORE_URL", "").strip())
-
-
-def _configured_timeout() -> float:
     try:
-        value = float(os.getenv("OUTIS_ARTIFACT_STORE_TIMEOUT", "10") or "10")
-    except ValueError:
-        return 10.0
-    return max(0.5, min(value, 60.0))
-
-
-def _validated_base_url(value: str) -> str:
-    raw = value.strip().rstrip("/")
-    try:
-        parsed = urlsplit(raw)
-    except ValueError as exc:
-        raise ArtifactStoreError("ArtifactStore URL is invalid") from exc
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ArtifactStoreError("ArtifactStore URL must be an absolute HTTP(S) URL")
-    if parsed.username or parsed.password or parsed.query or parsed.fragment:
-        raise ArtifactStoreError("ArtifactStore URL must not contain credentials, query, or fragment")
-    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
+        return resolve_artifact_store_configuration() is not None
+    except ArtifactStoreConfigurationError:
+        # A present-but-invalid persisted file is still an intended external
+        # provider. Advertise the operation so its route reports a 502 config
+        # fault rather than pretending the capability was never configured.
+        return persisted_configuration_present()
 
 
 class ArtifactStoreClient:
@@ -61,7 +57,10 @@ class ArtifactStoreClient:
         timeout_seconds: float = 10.0,
         transport: httpx.AsyncBaseTransport | None = None,
     ):
-        self.base_url = _validated_base_url(base_url)
+        try:
+            self.base_url = validated_base_url(base_url)
+        except ArtifactStoreConfigurationError as exc:
+            raise ArtifactStoreError(str(exc)) from exc
         self.token = token.strip() if token else None
         self.timeout_seconds = timeout_seconds
         # Test seam only: production leaves this None so httpx builds its own
@@ -70,15 +69,32 @@ class ArtifactStoreClient:
         self._transport = transport
 
     @classmethod
-    def from_env(cls) -> "ArtifactStoreClient | None":
-        base_url = os.getenv("OUTIS_ARTIFACT_STORE_URL", "").strip()
-        if not base_url:
+    def from_configuration(
+        cls,
+        configuration: ArtifactStoreConfiguration | None,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> "ArtifactStoreClient | None":
+        if configuration is None:
             return None
         return cls(
-            base_url,
-            token=os.getenv("OUTIS_ARTIFACT_STORE_TOKEN", "").strip() or None,
-            timeout_seconds=_configured_timeout(),
+            configuration.base_url,
+            token=configuration.token,
+            timeout_seconds=configuration.timeout_seconds,
+            transport=transport,
         )
+
+    @classmethod
+    def from_config(cls) -> "ArtifactStoreClient | None":
+        try:
+            return cls.from_configuration(resolve_artifact_store_configuration())
+        except ArtifactStoreConfigurationError as exc:
+            raise ArtifactStoreError(str(exc)) from exc
+
+    @classmethod
+    def from_env(cls) -> "ArtifactStoreClient | None":
+        """Backward-compatible name for the unified configuration resolver."""
+        return cls.from_config()
 
     async def list_artifacts(self) -> dict:
         headers = {"Accept": "application/json"}

@@ -137,8 +137,13 @@ export PATH="/app/.local/bin:$PATH"
 
 # Run first-time setup as the app user so data/ files get the right ownership.
 # setup.py is idempotent — skips auth.json / .env if they already exist.
-# || true so a setup failure never prevents the container from starting.
-"$GOSU_BIN" "$ODY_USER" "$PYTHON_BIN" /app/setup.py || true
+# The managed-bootstrap module owns auth creation/reconciliation transactionally,
+# so its exact one-shot command bypasses setup.py; otherwise setup.py could create
+# and print an unrelated temporary admin before bootstrap validates the provider.
+# || true so an ordinary setup failure never prevents the container from starting.
+if ! { [ "${1:-}" = "python" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "src.managed_bootstrap" ]; }; then
+    "$GOSU_BIN" "$ODY_USER" "$PYTHON_BIN" /app/setup.py || true
+fi
 
 # Drop root and run the actual app. `gosu` is preferred over `su` /
 # `sudo` because it cleans up the process tree (no extra shell layer)

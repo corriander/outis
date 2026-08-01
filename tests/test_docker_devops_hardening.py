@@ -100,6 +100,19 @@ def test_docker_entrypoint_does_not_resolve_root_commands_from_app_local_path():
     assert final_exec > path_export
 
 
+def test_docker_entrypoint_skips_automatic_setup_for_managed_bootstrap_only():
+    script = (ROOT / "docker" / "entrypoint.sh").read_text(encoding="utf-8")
+    setup_call = '"$GOSU_BIN" "$ODY_USER" "$PYTHON_BIN" /app/setup.py'
+    guard = (
+        '[ "${1:-}" = "python" ] && [ "${2:-}" = "-m" ] '
+        '&& [ "${3:-}" = "src.managed_bootstrap" ]'
+    )
+
+    assert guard in script
+    assert script.index(guard) < script.index(setup_call)
+    assert script.count(setup_call) == 1
+
+
 def test_docker_entrypoint_ownership_repair_stays_inside_expected_mounts():
     script = (ROOT / "docker" / "entrypoint.sh").read_text(encoding="utf-8")
     assert "find /app -xdev" in script

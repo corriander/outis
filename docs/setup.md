@@ -91,6 +91,58 @@ the secret-manager CLI do not need to be installed in the image. The public
 schema contains no private vault or item names. Run `./scripts/outis config` to
 validate the redacted configuration without starting containers.
 
+#### Managed one-shot bootstrap
+
+An external deployment manager can hand Outis its initial administrator and
+ArtifactStore credentials once, then start and restart it without resolving
+those secrets again. This is a local data-plane operation, not a provisioning
+API. Stop the main application container before applying it so no running
+process holds stale authentication state:
+
+```bash
+docker compose stop odysseus
+
+# Export or inject these four values for this command only; do not put their
+# values in argv or commit them to a Compose override.
+export ODYSSEUS_ADMIN_USER=admin
+export ODYSSEUS_ADMIN_PASSWORD='resolved-by-your-secret-source'
+export OUTIS_ARTIFACT_STORE_URL='http://provider-host:7331'
+export OUTIS_ARTIFACT_STORE_TOKEN='resolved-by-your-secret-source'
+
+docker compose run --rm --no-deps \
+  -e ODYSSEUS_ADMIN_USER \
+  -e ODYSSEUS_ADMIN_PASSWORD \
+  -e OUTIS_ARTIFACT_STORE_URL \
+  -e OUTIS_ARTIFACT_STORE_TOKEN \
+  odysseus python -m src.managed_bootstrap apply
+```
+
+unset ODYSSEUS_ADMIN_PASSWORD OUTIS_ARTIFACT_STORE_TOKEN
+
+The command validates the supplied configuration, persists the provider
+credential encrypted in the normal Outis data directory, and reads it back
+before activation. It also makes a best-effort authenticated request to
+`/v1/artifacts`. Provider unavailability or rejected credentials do not block
+configuration: the command succeeds with `verified: false` and a non-secret
+`warning`, and the Cookbook inventory shows its normal unavailable state until
+the provider responds. Re-run the same idempotent command later to record a
+successful verification. Invalid local input, such as a malformed URL or
+missing credential, still fails without replacing the active configuration.
+
+The JSON result contains an opaque `revision` for a deployment manager to
+attest, but never a password or bearer value. Inspect the non-secret state
+without supplying credentials:
+
+```bash
+docker compose run --rm --no-deps \
+  odysseus python -m src.managed_bootstrap status
+```
+
+Once bootstrapped, the persisted provider configuration is authoritative as a
+whole for capability reporting and inventory requests. The environment-only
+configuration above remains supported when no persisted bootstrap exists.
+`OUTIS_COOKBOOK_MODE` remains an independent deployment choice.
+
 To include optional extras in the image (PDF viewer and Office extraction,
 including AGPL PyMuPDF), set `INSTALL_OPTIONAL=true` in `.env.local` and run the
 same `./scripts/outis deploy` command.
