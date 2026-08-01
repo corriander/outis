@@ -38,7 +38,7 @@ python-dateutil
 caldav
 cryptography
 bcrypt
-mcp
+mcp<2  # 2.0.0 removed the low-level Server.list_tools API the MCP servers use
 pyotp
 qrcode[pil]
 croniter
