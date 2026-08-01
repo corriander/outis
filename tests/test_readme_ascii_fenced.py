@@ -22,11 +22,11 @@ def _fenced_segments(text: str):
     return parts[1::2]
 
 
-def test_readme_opens_with_wordmark_title():
-    # The README must still open with a recognizable Odysseus title: now the
-    # centered wordmark image rather than an H1 / ASCII banner.
-    head = "\n".join(README.read_text(encoding="utf-8").splitlines()[:15])
-    assert 'alt="Odysseus"' in head, "README must open with the Odysseus wordmark image"
+def test_readme_opens_with_project_title():
+    # The README must open with a recognizable project title. Upstream pins its
+    # wordmark image here; this fork's README opens with a plain H1 instead.
+    first_line = README.read_text(encoding="utf-8").lstrip().splitlines()[0]
+    assert first_line.rstrip() == "# Outis", "README must open with the '# Outis' title"
 
 
 def test_reintroduced_ascii_banner_stays_fenced():
