@@ -5,6 +5,12 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
+# Compose derives a project name from the checkout directory unless told
+# otherwise, so a clone into `outis-2` or a worktree silently becomes a second,
+# competing deployment with its own containers and volumes. Pin it here so the
+# operator surface always addresses the same project regardless of path.
+COMPOSE_PROJECT="${COMPOSE_PROJECT_NAME:-outis}"
+
 usage() {
   cat <<'EOF'
 Usage: ./scripts/outis <command>
@@ -28,7 +34,7 @@ require_command() {
 }
 
 compose() {
-  docker compose "$@"
+  docker compose -p "${COMPOSE_PROJECT}" "$@"
 }
 
 command="${1:-}"
@@ -37,19 +43,19 @@ case "${command}" in
     require_command varlock
     require_command docker
     exec varlock run --no-inject-graph -- \
-      docker compose up -d --build --force-recreate odysseus
+      docker compose -p "${COMPOSE_PROJECT}" up -d --build --force-recreate odysseus
     ;;
   restart)
     require_command docker
-    exec docker compose restart odysseus
+    exec docker compose -p "${COMPOSE_PROJECT}" restart odysseus
     ;;
   status)
     require_command docker
-    exec docker compose ps odysseus
+    exec docker compose -p "${COMPOSE_PROJECT}" ps odysseus
     ;;
   logs)
     require_command docker
-    exec docker compose logs --tail=200 -f odysseus
+    exec docker compose -p "${COMPOSE_PROJECT}" logs --tail=200 -f odysseus
     ;;
   inventory)
     require_command docker
@@ -80,7 +86,7 @@ PY
     ;;
   stop)
     require_command docker
-    exec docker compose stop odysseus
+    exec docker compose -p "${COMPOSE_PROJECT}" stop odysseus
     ;;
   -h|--help|help|"")
     usage
