@@ -9,6 +9,7 @@
 *.bash text eol=lf
 entrypoint.sh text eol=lf
 docker/entrypoint.sh text eol=lf
+scripts/outis text eol=lf
 
 # Windows-native scripts stay CRLF.
 *.ps1 text eol=crlf
