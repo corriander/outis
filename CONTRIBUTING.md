@@ -114,6 +114,31 @@ If you need a value that has no constant or helper yet, add it to `src/constants
 
 **Commits:** use [Conventional Commits](https://www.conventionalcommits.org), `type(scope): summary` (e.g. `fix(search): ...`, `feat(notes): ...`, `docs(contributing): ...`). Common types: `fix`, `feat`, `refactor`, `docs`, `test`, `chore`, `ci`. Keep the subject short and imperative; put the "why" in the body when it isn't obvious.
 
+Commit subjects are not cosmetic here: they are the input to the release
+automation below. A change landed under `chore:` will not appear in the
+changelog and will not move the version.
+
+## Releases
+
+Releases are automated with
+[release-please](https://github.com/googleapis/release-please). Nobody edits a
+version number by hand.
+
+- Every push to `main` refreshes an open **release PR** listing the
+  Conventional Commits accumulated since the last release and the version they
+  imply. Nothing ships while that PR is open.
+- Merging the release PR bumps `APP_VERSION` in `src/constants.py`, updates
+  `CHANGELOG.md`, tags `outis-vX.Y.Z`, publishes the GitHub release, and
+  publishes the matching `ghcr.io/corriander/outis:X.Y.Z` image.
+
+While the project is on a `0.x` stream, `feat` and `fix` alike bump the minor
+version — the `0.x` contract is that anything may move. A commit marked
+breaking (`feat!:` or a `BREAKING CHANGE:` footer) is what eventually cuts
+`1.0.0`, so use it deliberately.
+
+`APP_VERSION` carries an `{x-release-please-version}` annotation. Leave both
+the annotation and the value alone; the release PR rewrites the literal.
+
 ## Issue Reports
 
 For bugs, include:
