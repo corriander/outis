@@ -23,6 +23,10 @@ Commands:
   inventory   Exercise the configured ArtifactStore through the Outis client
   config      Validate and display the redacted Varlock configuration
   stop        Stop the Outis container
+
+This is the deployment surface for standalone Outis deployments. If an
+external control plane or orchestrator manages this deployment, use that
+plane's operator surface instead of this script.
 EOF
 }
 

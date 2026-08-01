@@ -55,6 +55,13 @@ surface that is otherwise easy to forget:
 ./scripts/outis stop
 ```
 
+> **Jurisdiction:** `scripts/outis` is the deployment surface for *standalone*
+> Outis deployments — a checkout that owns its own containers, volumes, and
+> lifecycle. If an external control plane or orchestrator manages this
+> deployment, use that plane's operator surface instead: it owns start, stop,
+> upgrade, and configuration, and driving Compose from the checkout can leave
+> the running deployment diverged from the state that plane believes it holds.
+
 For private values, create `.env.local`. Varlock auto-loads it after the public
 schema. Store secret-manager expressions rather than resolved credentials:
 
