@@ -40,12 +40,27 @@ cd outis
 ./scripts/outis deploy
 ```
 
-`deploy` is the canonical command after either a code or configuration change:
-it validates and injects configuration through Varlock, rebuilds the image, and
-recreates the `odysseus` service. `restart` deliberately does not build or
-recreate anything; use it only to restart the existing container with its
-current image and configuration. The same wrapper provides the small operator
-surface that is otherwise easy to forget:
+`deploy` is the canonical command after a configuration change or a new
+release: it validates and injects configuration through Varlock, pulls
+`ghcr.io/corriander/outis:${OUTIS_TAG:-latest}`, and recreates the `odysseus`
+service. Set `OUTIS_TAG` to a released version to pin the deployment; the
+default `latest` tracks `main`.
+
+To deploy your own working tree instead of a published image, add `--build`:
+
+```bash
+./scripts/outis deploy --build
+```
+
+That builds from the checkout and tags the result with the same image name, so
+it shadows the published artefact under that tag until the next plain `deploy`
+pulls it back. Use it for local development, and for the window before the
+first image has been published to GHCR.
+
+`restart` deliberately does not build, pull, or recreate anything; use it only
+to restart the existing container with its current image and configuration. The
+same wrapper provides the small operator surface that is otherwise easy to
+forget:
 
 ```bash
 ./scripts/outis restart

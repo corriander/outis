@@ -13,10 +13,13 @@ COMPOSE_PROJECT="${COMPOSE_PROJECT_NAME:-outis}"
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/outis <command>
+Usage: ./scripts/outis <command> [options]
 
 Commands:
-  deploy      Validate config, rebuild, and recreate the Outis container
+  deploy      Validate config, pull the published image, and recreate the
+              Outis container
+                --build   Build the image from this checkout instead of
+                          pulling the published one
   restart     Restart the existing Outis container without rebuilding
   status      Show the Outis container status
   logs        Follow recent Outis logs
@@ -46,8 +49,37 @@ case "${command}" in
   deploy)
     require_command varlock
     require_command docker
+    shift
+    build_from_source=0
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --build)
+          build_from_source=1
+          shift
+          ;;
+        *)
+          echo "Unknown option for deploy: $1" >&2
+          usage >&2
+          exit 2
+          ;;
+      esac
+    done
+
+    if [ "${build_from_source}" -eq 1 ]; then
+      # Source build: tags the local image as ghcr.io/corriander/outis:$OUTIS_TAG
+      # (the `image:` key in docker-compose.yml), so it shadows the published
+      # artefact under that tag until the next pull.
+      exec varlock run --no-inject-graph -- \
+        docker compose -p "${COMPOSE_PROJECT}" up -d --build --force-recreate odysseus
+    fi
+
+    # Default: deploy the published artefact. Pull and up run under a single
+    # Varlock resolution so secrets are fetched once.
     exec varlock run --no-inject-graph -- \
-      docker compose -p "${COMPOSE_PROJECT}" up -d --build --force-recreate odysseus
+      bash -c '
+        docker compose "$@" pull odysseus &&
+        docker compose "$@" up -d --force-recreate odysseus
+      ' outis-deploy -p "${COMPOSE_PROJECT}"
     ;;
   restart)
     require_command docker

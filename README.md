@@ -39,10 +39,11 @@ cd outis
 ./scripts/outis deploy
 ```
 
-The wrapper validates configuration through Varlock, rebuilds the image, and
-recreates the Outis container so code and environment changes use the same
-command. Open `http://localhost:7000` when the containers are healthy. The
-first admin password is printed by `./scripts/outis logs`.
+The wrapper validates configuration through Varlock, pulls the published
+`ghcr.io/corriander/outis` image, and recreates the Outis container. Add
+`--build` to deploy your working tree instead of the published image. Open
+`http://localhost:7000` when the containers are healthy. The first admin
+password is printed by `./scripts/outis logs`.
 
 Native installs, GPU notes, Windows/macOS instructions, HTTPS, and configuration live in the [setup guide](docs/setup.md).
 
