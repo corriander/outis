@@ -3,8 +3,6 @@ import json
 import httpx
 import pytest
 
-from core.auth import AuthManager
-
 
 @pytest.fixture
 def bootstrap_state(tmp_path, monkeypatch):
@@ -39,6 +37,7 @@ def bootstrap_state(tmp_path, monkeypatch):
         "key": key_path,
         "config": config,
         "bootstrap": bootstrap,
+        "auth_manager_cls": bootstrap.AuthManager,
     }
 
 
@@ -98,7 +97,7 @@ async def test_fresh_bootstrap_persists_encrypted_verified_configuration(
     assert result["artifact_store"]["verified"] is True
     assert result["artifact_store"]["verified_at"]
 
-    auth = AuthManager(auth_path=str(bootstrap_state["auth"]))
+    auth = bootstrap_state["auth_manager_cls"](auth_path=str(bootstrap_state["auth"]))
     assert auth.verify_password("managedadmin", "managed-password") is True
     assert auth.is_admin("managedadmin") is True
 
@@ -140,7 +139,7 @@ async def test_persisted_configuration_wins_as_a_whole_over_environment(
 async def test_existing_admin_is_reconciled_without_touching_other_credentials(
     bootstrap_state, monkeypatch
 ):
-    auth = AuthManager(auth_path=str(bootstrap_state["auth"]))
+    auth = bootstrap_state["auth_manager_cls"](auth_path=str(bootstrap_state["auth"]))
     assert auth.create_user("managedadmin", "old-password", is_admin=False)
     assert auth.create_user("other", "other-password", is_admin=True)
     auth._config["users"]["managedadmin"].update(
@@ -155,7 +154,7 @@ async def test_existing_admin_is_reconciled_without_touching_other_credentials(
         transport=_transport()
     )
 
-    reloaded = AuthManager(auth_path=str(bootstrap_state["auth"]))
+    reloaded = bootstrap_state["auth_manager_cls"](auth_path=str(bootstrap_state["auth"]))
     assert reloaded.verify_password("managedadmin", "new-managed-password") is True
     assert reloaded.verify_password("managedadmin", "old-password") is False
     assert reloaded.is_admin("managedadmin") is True
@@ -169,17 +168,17 @@ async def test_existing_admin_is_reconciled_without_touching_other_credentials(
 async def test_password_is_not_changed_when_session_revocation_cannot_persist(
     bootstrap_state, monkeypatch
 ):
-    auth = AuthManager(auth_path=str(bootstrap_state["auth"]))
+    auth = bootstrap_state["auth_manager_cls"](auth_path=str(bootstrap_state["auth"]))
     assert auth.create_user("managedadmin", "old-password", is_admin=True)
     assert auth.create_session("managedadmin", "old-password")
     _set_inputs(monkeypatch, password="new-managed-password")
-    monkeypatch.setattr(AuthManager, "_save_sessions", lambda self: False)
+    monkeypatch.setattr(bootstrap_state["auth_manager_cls"], "_save_sessions", lambda self: False)
 
     with pytest.raises(bootstrap_state["bootstrap"].ManagedBootstrapError) as exc:
         await bootstrap_state["bootstrap"].apply_bootstrap(transport=_transport())
 
     assert "sessions could not be persisted" in str(exc.value)
-    reloaded = AuthManager(auth_path=str(bootstrap_state["auth"]))
+    reloaded = bootstrap_state["auth_manager_cls"](auth_path=str(bootstrap_state["auth"]))
     assert reloaded.verify_password("managedadmin", "old-password") is True
     assert reloaded.verify_password("managedadmin", "new-managed-password") is False
     assert not bootstrap_state["active"].exists()
@@ -198,7 +197,7 @@ async def test_unreachable_first_provider_is_saved_unverified_with_warning(
     )
 
     active = bootstrap_state["config"].load_persisted_configuration()
-    auth = AuthManager(auth_path=str(bootstrap_state["auth"]))
+    auth = bootstrap_state["auth_manager_cls"](auth_path=str(bootstrap_state["auth"]))
     assert result["configured"] is True
     assert result["verified"] is False
     assert "could not be verified" in result["warning"]
@@ -243,7 +242,7 @@ async def test_unverified_replacement_activates_operator_supplied_state(
     )
 
     active = bootstrap_state["config"].load_persisted_configuration()
-    auth = AuthManager(auth_path=str(bootstrap_state["auth"]))
+    auth = bootstrap_state["auth_manager_cls"](auth_path=str(bootstrap_state["auth"]))
     assert active is not None
     assert active.revision != first["revision"]
     assert active.token == "replacement-token"
@@ -298,7 +297,7 @@ async def test_status_fails_closed_when_managed_admin_is_no_longer_admin(
 ):
     _set_inputs(monkeypatch)
     applied = await bootstrap_state["bootstrap"].apply_bootstrap(transport=_transport())
-    auth = AuthManager(auth_path=str(bootstrap_state["auth"]))
+    auth = bootstrap_state["auth_manager_cls"](auth_path=str(bootstrap_state["auth"]))
     auth._config["users"]["managedadmin"]["is_admin"] = False
     auth._save()
 
