@@ -1,5 +1,12 @@
 services:
   odysseus:
+    # Published artefact identity. With both `image:` and `build:` present,
+    # `up` uses this reference (pulling if absent) while `build`/`up --build`
+    # tags the local build with the same name — so a source build and a
+    # published build are never two anonymous, indistinguishable images.
+    # Pin OUTIS_TAG to a released version (e.g. 0.1.0) for a reproducible
+    # deployment; `latest` tracks main.
+    image: ghcr.io/corriander/outis:${OUTIS_TAG:-latest}
     build:
       context: .
       args:
