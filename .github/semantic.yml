@@ -1,7 +1,0 @@
-# Configuration for the semantic-prs GitHub App
-# (https://github.com/Ezard/semantic-prs).
-#
-# Only the PR title is validated: squash merges use the title as the commit
-# subject, and that subject is what the release automation reads. Individual
-# commits on a PR branch stay unconstrained.
-titleOnly: true

@@ -13,26 +13,6 @@ on:
 permissions: {}
 
 jobs:
-  check-description:
-    name: Check PR description
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-      issues: write
-    # Skip bots: they open PRs programmatically and have their own process.
-    if: github.event.pull_request.user.type != 'Bot'
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
-        with:
-          ref: ${{ github.base_ref }}
-          sparse-checkout: .github/scripts
-          persist-credentials: false
-
-      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
-        with:
-          script: return require('./.github/scripts/check-pr-description.js')({github, context, core})
-
   check-title:
     name: Check PR title (Conventional Commits)
     runs-on: ubuntu-latest
