@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/corriander/outis/compare/outis-v0.1.0...outis-v0.2.0) (2026-08-01)
+
+
+### Features
+
+* **integration:** add managed provider bootstrap ([#6](https://github.com/corriander/outis/issues/6)) ([4f8b59b](https://github.com/corriander/outis/commit/4f8b59b389c4e83771860dd47131760f5236055c))
+
 ## 0.1.0 (2026-08-01)
 
 
