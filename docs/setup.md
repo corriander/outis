@@ -104,6 +104,23 @@ only when you intentionally want LAN/reverse-proxy access.
 > Cookbook serves local models on CPU only. For GPU-accelerated model serving,
 > run natively instead — see [Apple Silicon](#apple-silicon) below.
 
+#### Published image tags
+
+Images are published to `ghcr.io/corriander/outis` for `linux/amd64` and
+`linux/arm64`. Set `OUTIS_TAG` to whichever of these you want:
+
+| Tag | Meaning |
+| --- | --- |
+| `latest` | Tip of `main`. Moves. The default. |
+| `X.Y.Z` | A release. Immutable — the reproducible choice for a deployment. |
+| `dev` | Tip of `dev`. Moves; expect breakage. |
+| `X.Y.Z-dev.<sha>` | An immutable pin of a specific `dev` commit. |
+| `preview-<branch>-<sha>` | An immutable ad-hoc build of a branch. |
+
+Preview images are not built automatically. A maintainer publishes one by
+running the **ci / docker publish** workflow manually against any branch; the
+tag it produces is printed in the run summary.
+
 ### Native Linux / macOS
 ```bash
 git clone https://github.com/corriander/outis.git

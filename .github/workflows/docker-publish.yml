@@ -1,8 +1,28 @@
 name: ci / docker publish
 
-# Build the Odysseus image and publish to GHCR.
-#   push to main -> :latest, :X.Y.Z            (curated release; main is fast-forwarded at releases)
-#   push to dev  -> :dev,    :X.Y.Z-dev.<sha>  (rolling dev + an immutable, traceable pin)
+# Build the Outis image and publish to GHCR. Four lanes, one build pipeline:
+#
+#   push to main       -> :latest                     (rolling tip of main)
+#   push to dev        -> :dev, :X.Y.Z-dev.<sha>      (rolling dev + immutable pin)
+#   workflow_call      -> :X.Y.Z                      (immutable release tag)
+#   workflow_dispatch  -> :preview-<branch>-<sha>     (immutable ad-hoc preview)
+#
+# Why the release lane is `workflow_call` and not `on: push: tags:`
+# ----------------------------------------------------------------
+# The release automation creates its tag and GitHub release with the default
+# GITHUB_TOKEN. Events raised by GITHUB_TOKEN do not start further workflow
+# runs — GitHub's recursion guard — so a `push: tags:` or `release: published`
+# trigger here would simply never fire. `release.yml` therefore calls this
+# workflow directly once release-please reports a release, which keeps the
+# whole flow on GITHUB_TOKEN with no personal access token anywhere.
+#
+# Preview lane
+# ------------
+# Run this workflow manually (Actions -> "ci / docker publish" -> Run workflow)
+# on any branch to publish `:preview-<sanitized-branch>-<shortsha>`. The tag is
+# immutable, human-findable, and cannot collide with a release tag because
+# release tags are bare semver and previews always carry the `preview-` prefix.
+#
 # Multi-arch (linux/amd64 + linux/arm64): each arch builds on its own native
 # runner and pushes by digest, then a merge job stitches the digests into one
 # manifest list and applies the tags (faster + cleaner than QEMU emulation).
@@ -15,9 +35,23 @@ on:
       - '**.md'
       - 'docs/**'
       - '.github/ISSUE_TEMPLATE/**'
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref or SHA to build and publish.
+        required: true
+        type: string
+      version:
+        description: Semver to publish as the immutable image tag (no leading v).
+        required: true
+        type: string
 
+# `inputs.version` is empty for push and workflow_dispatch, so a release run
+# never shares a concurrency group with the push-to-main run for the same
+# commit and the two cannot cancel each other.
 concurrency:
-  group: docker-publish-${{ github.ref }}
+  group: docker-publish-${{ github.event_name }}-${{ github.ref }}-${{ inputs.version }}
   cancel-in-progress: true
 
 permissions:
@@ -47,6 +81,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
+          ref: ${{ inputs.ref || github.ref }}
           persist-credentials: false
       - name: Set up Buildx
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4.1.0
@@ -88,14 +123,60 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
+          ref: ${{ inputs.ref || github.ref }}
           persist-credentials: false
-      - name: Read APP_VERSION + short sha
-        id: ver
+      - name: Resolve publish lane
+        id: ctx
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          BUILD_SHA: ${{ github.sha }}
         run: |
-          v=$(grep -E '^APP_VERSION' src/constants.py | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
-          [ -n "$v" ] || { echo "APP_VERSION not found"; exit 1; }
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-          echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          short="${BUILD_SHA:0:7}"
+
+          # Placeholders keep every `type=raw,value=` non-empty; the matching
+          # `enable=` expression decides what is actually published.
+          version="0.0.0"
+          preview="preview-unused-0000000"
+
+          if [ -n "${INPUT_VERSION}" ]; then
+            mode="release"
+            version="${INPUT_VERSION#v}"
+            primary="${version}"
+          elif [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            mode="preview"
+            slug=$(printf '%s' "${REF_NAME}" \
+              | tr '[:upper:]' '[:lower:]' \
+              | sed -E 's/[^a-z0-9._-]+/-/g; s/^[.-]+//; s/[.-]+$//' \
+              | cut -c1-40)
+            [ -n "${slug}" ] || slug="ref"
+            preview="preview-${slug}-${short}"
+            primary="${preview}"
+          elif [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            mode="main"
+            primary="latest"
+          elif [ "${GITHUB_REF}" = "refs/heads/dev" ]; then
+            mode="dev"
+            # The dev lane pins against the in-tree APP_VERSION, which the
+            # release automation owns on main.
+            version=$(grep -E '^APP_VERSION' src/constants.py | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+            [ -n "${version}" ] || { echo "::error::APP_VERSION not found"; exit 1; }
+            primary="dev"
+          else
+            echo "::error::No publish lane for event=${EVENT_NAME} ref=${GITHUB_REF}"
+            exit 1
+          fi
+
+          {
+            echo "mode=${mode}"
+            echo "version=${version}"
+            echo "preview=${preview}"
+            echo "short=${short}"
+            echo "primary=${primary}"
+          } >> "$GITHUB_OUTPUT"
+          echo "lane=\`${mode}\` primary tag=\`${primary}\`" >> "$GITHUB_STEP_SUMMARY"
       - name: Download digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
@@ -116,14 +197,16 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            type=raw,value=${{ steps.ver.outputs.version }},enable=${{ github.ref == 'refs/heads/main' }}
-            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
-            type=raw,value=${{ steps.ver.outputs.version }}-dev.${{ steps.ver.outputs.short }},enable=${{ github.ref == 'refs/heads/dev' }}
+            type=raw,value=latest,enable=${{ steps.ctx.outputs.mode == 'main' }}
+            type=raw,value=${{ steps.ctx.outputs.version }},enable=${{ steps.ctx.outputs.mode == 'release' }}
+            type=raw,value=dev,enable=${{ steps.ctx.outputs.mode == 'dev' }}
+            type=raw,value=${{ steps.ctx.outputs.version }}-dev.${{ steps.ctx.outputs.short }},enable=${{ steps.ctx.outputs.mode == 'dev' }}
+            type=raw,value=${{ steps.ctx.outputs.preview }},enable=${{ steps.ctx.outputs.mode == 'preview' }}
       - name: Create manifest list + push tags
         working-directory: /tmp/digests
         run: |
           tags=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          [ -n "$tags" ] || { echo "::error::No tags were computed for this lane"; exit 1; }
           digests=$(printf "${REGISTRY}/${IMAGE_NAME}@sha256:%s " *)
           # word-splitting is intended: $tags and $digests each expand to multiple args
           # shellcheck disable=SC2086
@@ -132,9 +215,8 @@ jobs:
           REGISTRY: ${{ env.REGISTRY }}
           IMAGE_NAME: ${{ env.IMAGE_NAME }}
       - name: Inspect
-        run: |
-          if [ "$GITHUB_REF" = "refs/heads/main" ]; then ref=latest; else ref=dev; fi
-          docker buildx imagetools inspect "${REGISTRY}/${IMAGE_NAME}:${ref}"
+        run: docker buildx imagetools inspect "${REGISTRY}/${IMAGE_NAME}:${PRIMARY_TAG}"
         env:
           REGISTRY: ${{ env.REGISTRY }}
           IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          PRIMARY_TAG: ${{ steps.ctx.outputs.primary }}
