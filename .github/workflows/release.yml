@@ -11,10 +11,12 @@ name: ci / release
 #
 # Versioning
 # ----------
-# The manifest is seeded at 0.0.0 with `bump-minor-pre-major`, so the first
-# release cut from feat-bearing history is 0.1.0. While the stream is 0.x,
-# `bump-patch-for-minor-pre-major: false` means fixes bump the minor too — the
-# 0.x contract is "anything may move".
+# 
+# The manifest is seeded at 0.0.0 and initial-version pins the first release
+# to 0.1.0, since release-please's no-previous-release path would otherwise
+# default to 1.0.0. We let ! changes and feat bump minor while the stream is 0.x,
+# leaving 1.0.0 as a conscious release decision. In other words, the 0.x contract
+# is "anything may move".
 #
 # `bootstrap-sha` in release-please-config.json caps how far back commits are
 # read, so the first CHANGELOG covers this fork's own history rather than the
