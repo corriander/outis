@@ -7,9 +7,32 @@ cd "${REPO_ROOT}"
 
 # Compose derives a project name from the checkout directory unless told
 # otherwise, so a clone into `outis-2` or a worktree silently becomes a second,
-# competing deployment with its own containers and volumes. Pin it here so the
-# operator surface always addresses the same project regardless of path.
-COMPOSE_PROJECT="${COMPOSE_PROJECT_NAME:-outis}"
+# competing deployment with its own containers and volumes. Varlock loads
+# `.env.local` only for its child process, which is too late for this wrapper's
+# `-p` argument. Read this one non-secret, literal setting up front so deploy,
+# status, logs, inventory, and stop always address the same project without
+# making read-only/operator commands resolve the deployment's secrets.
+COMPOSE_PROJECT="${COMPOSE_PROJECT_NAME:-}"
+if [ -z "${COMPOSE_PROJECT}" ] && [ -f .env.local ]; then
+  compose_project_assignment="$({
+    sed -nE 's/^[[:space:]]*(export[[:space:]]+)?COMPOSE_PROJECT_NAME[[:space:]]*=(.*)$/\2/p' \
+      .env.local || true
+  } | tail -n 1)"
+  if [ -n "${compose_project_assignment}" ]; then
+    COMPOSE_PROJECT="$(printf '%s\n' "${compose_project_assignment}" | sed -E \
+      -e 's/[[:space:]]+#.*$//' \
+      -e 's/^[[:space:]]+//' \
+      -e 's/[[:space:]]+$//' \
+      -e 's/^"([^"]*)"$/\1/' \
+      -e "s/^'([^']*)'$/\1/")"
+  fi
+fi
+COMPOSE_PROJECT="${COMPOSE_PROJECT:-outis}"
+
+if ! [[ "${COMPOSE_PROJECT}" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+  echo "Invalid COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT}" >&2
+  exit 2
+fi
 
 usage() {
   cat <<'EOF'

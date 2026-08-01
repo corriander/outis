@@ -10,6 +10,7 @@ import secrets
 import threading
 import time
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
@@ -94,6 +95,33 @@ class SetAdminResult(enum.Enum):
     LAST_ADMIN = "last_admin"           # would remove the last remaining admin
 
 
+@dataclass(frozen=True)
+class ManagedAdminReconcileResult:
+    username: str
+    created: bool
+    password_changed: bool
+    admin_changed: bool
+    sessions_revoked: int
+
+    @property
+    def changed(self) -> bool:
+        return self.created or self.password_changed or self.admin_changed
+
+
+def validate_managed_admin_credentials(username: str, password: str) -> str:
+    """Validate and normalize credentials supplied by the local bootstrap."""
+    normalized = str(username or "").strip().lower()
+    if not normalized:
+        raise ValueError("Managed admin username is required")
+    if normalized in RESERVED_USERNAMES:
+        raise ValueError("Managed admin username is reserved")
+    if len(password or "") < PASSWORD_MIN_LENGTH:
+        raise ValueError(
+            f"Managed admin password must be at least {PASSWORD_MIN_LENGTH} characters"
+        )
+    return normalized
+
+
 class AuthManager:
     """Manages multi-user password + session-token auth system."""
 
@@ -101,6 +129,7 @@ class AuthManager:
         self.auth_path = auth_path
         self._sessions_path = os.path.join(os.path.dirname(auth_path), "sessions.json")
         self._config: Dict[str, Any] = {}
+        self._load_error = False
         self._sessions: Dict[str, Dict[str, Any]] = {}  # token -> {username, expiry}
         # Guards mutations of self._sessions and the on-disk sessions.json.
         # Validate/create/revoke run concurrently from the FastAPI threadpool.
@@ -139,6 +168,7 @@ class AuthManager:
         except Exception as e:
             logger.error(f"Failed to load auth config: {e}")
             self._config = {}
+            self._load_error = True
 
     def _load_sessions(self):
         """Load persisted session tokens from disk, pruning expired ones."""
@@ -156,14 +186,16 @@ class AuthManager:
             logger.error(f"Failed to load sessions: {e}")
             self._sessions = {}
 
-    def _save_sessions(self):
+    def _save_sessions(self) -> bool:
         """Persist session tokens to disk (atomic, lock-guarded)."""
         try:
             with self._sessions_lock:
                 snapshot = dict(self._sessions)
             _atomic_write_json(self._sessions_path, snapshot)
+            return True
         except Exception as e:
             logger.error(f"Failed to save sessions: {e}")
+            return False
 
     def _migrate_single_user(self):
         """Migrate old single-user format to multi-user format."""
@@ -288,6 +320,74 @@ class AuthManager:
             self._save()
         logger.info(f"Created user '{username}' (admin={is_admin})")
         return True
+
+    def reconcile_managed_admin(
+        self, username: str, password: str
+    ) -> ManagedAdminReconcileResult:
+        """Converge one designated admin without disturbing other identities.
+
+        TOTP fields and API tokens are deliberately preserved.  A changed
+        password revokes every browser session belonging to the identity.
+        """
+        username = validate_managed_admin_credentials(username, password)
+        if self._load_error:
+            raise RuntimeError("Authentication configuration could not be read")
+        created = False
+        password_changed = False
+        admin_changed = False
+        sessions_revoked = 0
+
+        with self._config_lock:
+            users = self._config.setdefault("users", {})
+            user = users.get(username)
+            if user is None:
+                users[username] = {
+                    "password_hash": _hash_password(password),
+                    "created": time.time(),
+                    "is_admin": True,
+                    "privileges": dict(ADMIN_PRIVILEGES),
+                }
+                created = True
+                password_changed = True
+            else:
+                try:
+                    password_matches = _verify_password(
+                        password, user["password_hash"]
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise RuntimeError("Managed admin record is invalid") from exc
+                if not password_matches:
+                    sessions_revoked = self.revoke_user_sessions(
+                        username, strict_persistence=True
+                    )
+                    user["password_hash"] = _hash_password(password)
+                    password_changed = True
+                if not user.get("is_admin"):
+                    user["privileges_before_admin"] = dict(
+                        user.get("privileges") or DEFAULT_PRIVILEGES
+                    )
+                    user["is_admin"] = True
+                    user["privileges"] = dict(ADMIN_PRIVILEGES)
+                    admin_changed = True
+            if created or password_changed or admin_changed:
+                self._save()
+
+        logger.info(
+            "Reconciled managed admin '%s' (created=%s password_changed=%s "
+            "admin_changed=%s sessions_revoked=%d)",
+            username,
+            created,
+            password_changed,
+            admin_changed,
+            sessions_revoked,
+        )
+        return ManagedAdminReconcileResult(
+            username=username,
+            created=created,
+            password_changed=password_changed,
+            admin_changed=admin_changed,
+            sessions_revoked=sessions_revoked,
+        )
 
     def delete_user(self, username: str, requesting_user: str) -> bool:
         """Delete a user. Only admins can delete, and can't delete themselves.
@@ -657,7 +757,13 @@ class AuthManager:
             self._sessions.pop(token, None)
         self._save_sessions()
 
-    def revoke_user_sessions(self, username: str, except_token: Optional[str] = None) -> int:
+    def revoke_user_sessions(
+        self,
+        username: str,
+        except_token: Optional[str] = None,
+        *,
+        strict_persistence: bool = False,
+    ) -> int:
         """Revoke active browser sessions for a user, optionally preserving one."""
         username = username.strip().lower()
         revoked = 0
@@ -670,7 +776,9 @@ class AuthManager:
                 self._sessions.pop(token, None)
                 revoked += 1
             if revoked:
-                self._save_sessions()
+                saved = self._save_sessions()
+                if strict_persistence and not saved:
+                    raise RuntimeError("Revoked sessions could not be persisted")
         return revoked
 
     def status(self, token: Optional[str]) -> Dict[str, Any]:

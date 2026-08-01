@@ -37,7 +37,7 @@ async def test_inventory_route_returns_external_provider_document(monkeypatch):
     monkeypatch.setenv("AUTH_ENABLED", "false")
     monkeypatch.setenv("OUTIS_COOKBOOK_MODE", "external")
     monkeypatch.setenv("OUTIS_ARTIFACT_STORE_URL", "http://provider.invalid:7331")
-    monkeypatch.setattr(artifact_routes.ArtifactStoreClient, "from_env", lambda: FakeClient())
+    monkeypatch.setattr(artifact_routes.ArtifactStoreClient, "from_config", lambda: FakeClient())
 
     assert await _endpoint()(_request()) == document
 
@@ -53,7 +53,7 @@ async def test_inventory_route_surfaces_provider_unreachable_without_affecting_c
     monkeypatch.setenv("AUTH_ENABLED", "false")
     monkeypatch.setenv("OUTIS_COOKBOOK_MODE", "external")
     monkeypatch.setenv("OUTIS_ARTIFACT_STORE_URL", "http://provider.invalid:7331")
-    monkeypatch.setattr(artifact_routes.ArtifactStoreClient, "from_env", lambda: OfflineClient())
+    monkeypatch.setattr(artifact_routes.ArtifactStoreClient, "from_config", lambda: OfflineClient())
 
     with pytest.raises(HTTPException) as exc:
         await _endpoint()(_request())
