@@ -131,10 +131,12 @@ version number by hand.
   `CHANGELOG.md`, tags `outis-vX.Y.Z`, publishes the GitHub release, and
   publishes the matching `ghcr.io/corriander/outis:X.Y.Z` image.
 
-While the project is on a `0.x` stream, `feat` and `fix` alike bump the minor
-version — the `0.x` contract is that anything may move. A commit marked
-breaking (`feat!:` or a `BREAKING CHANGE:` footer) is what eventually cuts
-`1.0.0`, so use it deliberately.
+While the project is on a `0.x` stream, `feat` bumps the minor version and
+`fix` bumps the patch. A commit marked breaking (`feat!:` or a
+`BREAKING CHANGE:` footer) also bumps the minor — the `0.x` contract is that
+anything may move, and no commit type cuts `1.0.0`. That release will be a
+deliberate, maintainer-initiated cut when the project is ready to stand on
+its own.
 
 `APP_VERSION` carries an `{x-release-please-version}` annotation. Leave both
 the annotation and the value alone; the release PR rewrites the literal.
