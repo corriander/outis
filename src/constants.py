@@ -5,7 +5,9 @@ from urllib.parse import urlparse
 
 from src.runtime_paths import get_app_root, get_default_data_dir
 
-APP_VERSION = "1.0.2"
+# Owned by release-please: the release PR rewrites the literal below. Do not
+# edit it by hand, and keep the annotation on the same line as the value.
+APP_VERSION = "1.0.2"  # {x-release-please-version}
 
 # Outis is distributed under AGPL-3.0-or-later. Network deployments must make
 # the corresponding source for the deployed version easy for users to find.

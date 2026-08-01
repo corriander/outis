@@ -1,0 +1,20 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "f36f59e35c205b7fadb3996cc990596cb2dcaba1",
+  "release-type": "simple",
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": false,
+  "include-component-in-tag": true,
+  "separate-pull-requests": false,
+  "packages": {
+    ".": {
+      "component": "outis",
+      "extra-files": [
+        {
+          "type": "generic",
+          "path": "src/constants.py"
+        }
+      ]
+    }
+  }
+}

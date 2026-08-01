@@ -9,8 +9,10 @@ This page keeps the detailed install, deployment, troubleshooting, and configura
 > see [the fork policy](../FORK.md).
 
 Defaults work out of the box: clone, run, then configure models/search/email
-inside **Settings**. Only edit `.env` for deployment-level overrides like
-`APP_BIND`, `APP_PORT`, `AUTH_ENABLED`, `DATABASE_URL`, or a pre-seeded admin password.
+inside **Settings**. Deployment configuration has a committed Varlock contract
+in `.env.schema`; put machine-specific values and secret-manager resolvers in
+the ignored `.env.local` file. Plain `.env` remains compatible with Docker
+Compose, but is not the recommended place for credentials.
 
 > **Cookbook mode:** Outis defaults to the full inherited Cookbook
 > (`OUTIS_COOKBOOK_MODE=native`), with broad Hugging Face search merged into
@@ -27,22 +29,97 @@ Contributing? See [CONTRIBUTING.md](../CONTRIBUTING.md) for setup, testing, and
 pull request guidelines.
 
 ### Docker (recommended)
+
+Install Docker Compose and [Varlock](https://varlock.dev/) first. Varlock
+validates the public configuration contract and resolves private values before
+Compose starts the container.
+
 ```bash
 git clone https://github.com/corriander/outis.git
 cd outis
-cp .env.example .env       # optional, but recommended for explicit defaults
-docker compose up -d --build
+./scripts/outis deploy
 ```
-To include optional extras in the image (PDF viewer, Office extraction; includes AGPL PyMuPDF), build with `docker compose build --build-arg INSTALL_OPTIONAL=true` before `up`.
+
+`deploy` is the canonical command after a configuration change or a new
+release: it validates and injects configuration through Varlock, pulls
+`ghcr.io/corriander/outis:${OUTIS_TAG:-latest}`, and recreates the `odysseus`
+service. Set `OUTIS_TAG` to a released version to pin the deployment; the
+default `latest` tracks `main`.
+
+To deploy your own working tree instead of a published image, add `--build`:
+
+```bash
+./scripts/outis deploy --build
+```
+
+That builds from the checkout and tags the result with the same image name, so
+it shadows the published artefact under that tag until the next plain `deploy`
+pulls it back. Use it for local development, and for the window before the
+first image has been published to GHCR.
+
+`restart` deliberately does not build, pull, or recreate anything; use it only
+to restart the existing container with its current image and configuration. The
+same wrapper provides the small operator surface that is otherwise easy to
+forget:
+
+```bash
+./scripts/outis restart
+./scripts/outis status
+./scripts/outis logs
+./scripts/outis inventory  # exercise ArtifactStore through the container client
+./scripts/outis stop
+```
+
+> **Jurisdiction:** `scripts/outis` is the deployment surface for *standalone*
+> Outis deployments — a checkout that owns its own containers, volumes, and
+> lifecycle. If an external control plane or orchestrator manages this
+> deployment, use that plane's operator surface instead: it owns start, stop,
+> upgrade, and configuration, and driving Compose from the checkout can leave
+> the running deployment diverged from the state that plane believes it holds.
+
+For private values, create `.env.local`. Varlock auto-loads it after the public
+schema. Store secret-manager expressions rather than resolved credentials:
+
+```dotenv
+OUTIS_ARTIFACT_STORE_URL=http://host.docker.internal:7331
+OUTIS_ARTIFACT_STORE_NAME=Local models
+OUTIS_ARTIFACT_STORE_TOKEN=op(op://your-vault/your-item/your-field)
+```
+
+The token is resolved on the host and inherited by Docker Compose; Varlock and
+the secret-manager CLI do not need to be installed in the image. The public
+schema contains no private vault or item names. Run `./scripts/outis config` to
+validate the redacted configuration without starting containers.
+
+To include optional extras in the image (PDF viewer and Office extraction,
+including AGPL PyMuPDF), set `INSTALL_OPTIONAL=true` in `.env.local` and run the
+same `./scripts/outis deploy` command.
 
 Open `http://localhost:7000` when the containers are healthy. Docker Compose
 binds the web UI to `127.0.0.1` by default. If the port is taken, set
-`APP_PORT=7001` in `.env` and recreate the container. Set `APP_BIND=0.0.0.0`
+`APP_PORT=7001` in `.env.local` and redeploy. Set `APP_BIND=0.0.0.0`
 only when you intentionally want LAN/reverse-proxy access.
 
 > **On Apple Silicon (M-series) Macs:** Docker can't reach the Metal GPU, so
 > Cookbook serves local models on CPU only. For GPU-accelerated model serving,
 > run natively instead — see [Apple Silicon](#apple-silicon) below.
+
+#### Published image tags
+
+Images are published to `ghcr.io/corriander/outis` for `linux/amd64` and
+`linux/arm64`. Set `OUTIS_TAG` to whichever of these you want:
+
+| Tag | Meaning |
+| --- | --- |
+| `latest` | Tip of `main`. Moves. The default. |
+| `X.Y.Z` | A release. Immutable — the reproducible choice for a deployment. |
+| `dev` | Tip of `dev`. Moves; expect breakage. |
+| `X.Y.Z-dev.<sha>` | An immutable pin of a specific `dev` commit. |
+| `preview-<branch>-<sha>` | An immutable ad-hoc build of a branch. |
+
+Preview images are not built automatically. A maintainer publishes one by
+running the **ci / docker publish** workflow manually against any branch; the
+tag it produces is printed in the run summary.
 
 ### Native Linux / macOS
 ```bash

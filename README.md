@@ -30,16 +30,20 @@
 `main` is Outis' product and default branch. It starts from a stable upstream
 `main` baseline, then carries deliberate Outis changes. Some interface text and
 assets still use the Odysseus name while the identity transition proceeds without
-a wholesale rebrand.
+a wholesale rebrand. Docker Compose and [Varlock](https://varlock.dev/) are
+required for the canonical container workflow.
 
 ```bash
 git clone https://github.com/corriander/outis.git
 cd outis
-cp .env.example .env
-docker compose up -d --build
+./scripts/outis deploy
 ```
 
-Open `http://localhost:7000` when the containers are healthy. The first admin password is printed in `docker compose logs odysseus`.
+The wrapper validates configuration through Varlock, pulls the published
+`ghcr.io/corriander/outis` image, and recreates the Outis container. Add
+`--build` to deploy your working tree instead of the published image. Open
+`http://localhost:7000` when the containers are healthy. The first admin
+password is printed by `./scripts/outis logs`.
 
 Native installs, GPU notes, Windows/macOS instructions, HTTPS, and configuration live in the [setup guide](docs/setup.md).
 

@@ -1,0 +1,70 @@
+name: ci / release
+
+# release-please owns versioning, CHANGELOG.md, the git tag, and the GitHub
+# release. It works in two beats:
+#
+#   1. Every push to main, it maintains a "release PR" that accumulates the
+#      Conventional Commits landed since the last release and shows the version
+#      they imply. Nothing is released while that PR sits open.
+#   2. Merging the release PR pushes to main again; this run then cuts the tag
+#      (`outis-vX.Y.Z`) and publishes the GitHub release.
+#
+# Versioning
+# ----------
+# The manifest is seeded at 0.0.0 with `bump-minor-pre-major`, so the first
+# release cut from feat-bearing history is 0.1.0. While the stream is 0.x,
+# `bump-patch-for-minor-pre-major: false` means fixes bump the minor too — the
+# 0.x contract is "anything may move".
+#
+# `bootstrap-sha` in release-please-config.json caps how far back commits are
+# read, so the first CHANGELOG covers this fork's own history rather than the
+# entire inherited upstream one. It is ignored once a release PR has been cut.
+#
+# Image publishing
+# ----------------
+# A tag or release created with GITHUB_TOKEN does not start further workflow
+# runs (GitHub's recursion guard), so `docker-publish.yml` cannot listen for
+# it. This workflow calls that workflow directly instead, which keeps the whole
+# flow on GITHUB_TOKEN and needs no personal access token.
+
+on:
+  push:
+    branches: [main]
+
+# Releases must not race each other; never cancel one part-way.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  release-please:
+    name: Maintain release PR / cut release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # create tags, releases, and the release branch
+      pull-requests: write   # open and update the release PR
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7  # v5.0.0
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  publish-image:
+    name: Publish release image
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/docker-publish.yml
+    with:
+      ref: ${{ needs.release-please.outputs.tag_name }}
+      version: ${{ needs.release-please.outputs.version }}
