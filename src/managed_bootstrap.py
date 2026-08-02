@@ -7,8 +7,12 @@ Run ``apply`` only while the main Outis application process is stopped so its
 in-memory authentication state cannot diverge from the shared data directory.
 
 A run converges one or more independent provider roles as a single
-transaction under a single revision. ArtifactStore is required; ProfileService
-is optional and additive. A run that supplies no ProfileService inputs does
+transaction under a single revision. ArtifactStore is required and
+ProfileService is optional, which is an ordering rather than a coupling: a
+profile is authored against an artifact, so a ProfileService with no inventory
+to address has nothing to work on. The roles stay independent in every other
+respect -- neither is inferred from the other, and neither reads the other's
+configuration. A run that supplies no ProfileService inputs does
 not address that role at all: existing ProfileService state is left exactly as
 it was and contributes nothing to whether the revision changes, so an
 ArtifactStore-only deployment behaves identically whether or not a

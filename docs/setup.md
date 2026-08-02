@@ -185,7 +185,11 @@ ProfileService state is untouched and the shared revision does not change. An
 ArtifactStore-only deployment manager therefore needs no changes, and one that
 has configured both can re-run either alone. There is currently no way to
 retire a configured role through `apply`; remove its state file to do that.
-ArtifactStore is still required on every run.
+
+ArtifactStore is required on every run and ProfileService is not. That is an
+ordering, not a coupling: a profile is authored against an artifact, so a
+ProfileService with no inventory to address has nothing to work on. The roles
+remain independent in every other respect.
 
 The revision and managed administrator live in `data/managed_bootstrap.json`,
 with each role's provider configuration in `data/artifact_store.json` and
