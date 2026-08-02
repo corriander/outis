@@ -93,12 +93,41 @@ repair_bind_mount_ownership() {
     repair_tree_ownership "$dir"
 }
 
-# Repair image-owned writable paths without walking into bind-mounted host
-# trees, then repair the app-owned mount roots separately.
-repair_app_tree_ownership
-for dir in /app/data /app/logs /app/.ssh /app/.cache/huggingface /app/.local; do
-    repair_bind_mount_ownership "$dir"
-done
+# A `managed_bootstrap` one-shot is not an ordinary application start: it reads
+# or writes a couple of files under /app/data and exits. Decide that once, here,
+# and let the single decision govern both the ownership repair below and
+# setup.py further down. The check used to live only at the setup.py call, which
+# was correct but too late — the repair had already run by then.
+if [ "${1:-}" = "python" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "src.managed_bootstrap" ]; then
+    IS_MANAGED_BOOTSTRAP=1
+else
+    IS_MANAGED_BOOTSTRAP=0
+fi
+
+if [ "$IS_MANAGED_BOOTSTRAP" -eq 1 ]; then
+    # The recursive repair is the dominant cost of the one-shot and buys it
+    # nothing: `status` only reads, `apply` writes into /app/data as the very
+    # user the repair would have granted, and every other repaired path is
+    # irrelevant to both. Its cost also scales with the data directory, so it
+    # punishes exactly the deployments that have been used most — and `status`
+    # is designed to be called on every convergence.
+    #
+    # Still make the data directory itself owned, non-recursively and in
+    # constant time. That is the one case with no prior start to have
+    # established ownership: a first-ever `apply` against a fresh bind mount,
+    # where the mount root arrives owned by root and the app user could not
+    # otherwise create auth.json.
+    if [ -d /app/data ]; then
+        chown "$PUID:$PGID" /app/data 2>/dev/null || true
+    fi
+else
+    # Repair image-owned writable paths without walking into bind-mounted host
+    # trees, then repair the app-owned mount roots separately.
+    repair_app_tree_ownership
+    for dir in /app/data /app/logs /app/.ssh /app/.cache/huggingface /app/.local; do
+        repair_bind_mount_ownership "$dir"
+    done
+fi
 
 # Cookbook installs vllm/etc. via `pip install --user`, which pulls
 # nvidia-cuda-* wheels into /app/.local but does not set CUDA_HOME or
@@ -141,7 +170,7 @@ export PATH="/app/.local/bin:$PATH"
 # so its exact one-shot command bypasses setup.py; otherwise setup.py could create
 # and print an unrelated temporary admin before bootstrap validates the provider.
 # || true so an ordinary setup failure never prevents the container from starting.
-if ! { [ "${1:-}" = "python" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "src.managed_bootstrap" ]; }; then
+if [ "$IS_MANAGED_BOOTSTRAP" -eq 0 ]; then
     "$GOSU_BIN" "$ODY_USER" "$PYTHON_BIN" /app/setup.py || true
 fi
 

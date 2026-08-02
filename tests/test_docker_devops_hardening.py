@@ -113,6 +113,39 @@ def test_docker_entrypoint_skips_automatic_setup_for_managed_bootstrap_only():
     assert script.count(setup_call) == 1
 
 
+def test_docker_entrypoint_skips_ownership_repair_for_managed_bootstrap():
+    """One decision governs both the repair and setup.py, and it is made first.
+
+    The argv check previously sat only at the setup.py call. That was correct
+    but too late: the recursive ownership repair had already run, and it is the
+    dominant cost of a one-shot that only touches /app/data.
+    """
+    script = (ROOT / "docker" / "entrypoint.sh").read_text(encoding="utf-8")
+
+    decision = 'IS_MANAGED_BOOTSTRAP=1'
+    recursive_repair = "repair_app_tree_ownership\n"
+    setup_call = '"$GOSU_BIN" "$ODY_USER" "$PYTHON_BIN" /app/setup.py'
+
+    # The decision is made once, before either thing it governs.
+    assert script.count("IS_MANAGED_BOOTSTRAP=1") == 1
+    assert script.index(decision) < script.index(recursive_repair)
+    assert script.index(decision) < script.index(setup_call)
+
+    # Both consumers are guarded by that one variable, not by a repeated argv test.
+    assert 'if [ "$IS_MANAGED_BOOTSTRAP" -eq 1 ]; then' in script
+    assert 'if [ "$IS_MANAGED_BOOTSTRAP" -eq 0 ]; then' in script
+
+    # A first-ever apply has no prior start to have established ownership, so the
+    # data directory is still claimed — non-recursively, without a tree walk.
+    bootstrap_branch = script[
+        script.index('if [ "$IS_MANAGED_BOOTSTRAP" -eq 1 ]; then') : script.index(
+            recursive_repair
+        )
+    ]
+    assert 'chown "$PUID:$PGID" /app/data' in bootstrap_branch
+    assert "find " not in bootstrap_branch
+
+
 def test_docker_entrypoint_ownership_repair_stays_inside_expected_mounts():
     script = (ROOT / "docker" / "entrypoint.sh").read_text(encoding="utf-8")
     assert "find /app -xdev" in script

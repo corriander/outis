@@ -64,11 +64,22 @@ forget:
 
 ```bash
 ./scripts/outis restart
-./scripts/outis status
+./scripts/outis status     # every container in the project, not just the app
 ./scripts/outis logs
 ./scripts/outis inventory  # exercise ArtifactStore through the container client
-./scripts/outis stop
+./scripts/outis stop       # stops the whole project; containers are preserved
 ```
+
+`stop` addresses the project, so it also stops the supporting search, vector
+store, and notification containers. It stops them rather than removing them:
+their state survives, and `deploy` or `restart` brings the project back. There
+is deliberately no `down` verb — removing containers is a different promise than
+the rest of this surface makes.
+
+Because `stop` takes the whole project down, `restart` starts any stopped
+dependencies before bouncing the application, waiting on the search
+healthcheck the same way `deploy` does. It still never builds or recreates
+anything; use `deploy` for that.
 
 > **Jurisdiction:** `scripts/outis` is the deployment surface for *standalone*
 > Outis deployments — a checkout that owns its own containers, volumes, and
