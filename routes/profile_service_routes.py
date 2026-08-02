@@ -27,9 +27,15 @@ from profile_service.client import (
     ProfileServiceUnauthorized,
     ProfileServiceUnavailable,
     ProfileServiceError,
+    ProfileServiceRequestError,
 )
 
 _PREFIX = "/api/cookbook/profile-service"
+
+# Mirrors MAX_PROFILE_SERVICE_BYTES on the response side. Profile documents are
+# small; this ceiling refuses a browser that streams an unbounded body into the
+# proxy. The route is admin-gated, so this is depth rather than a perimeter.
+MAX_PROFILE_SERVICE_REQUEST_BYTES = 5 * 1024 * 1024
 
 
 def _envelope(status_code: int, code: str, message: str) -> JSONResponse:
@@ -95,7 +101,7 @@ def setup_profile_service_routes() -> APIRouter:
 
     def _client() -> ProfileServiceClient | JSONResponse:
         try:
-            client = ProfileServiceClient.from_env()
+            client = ProfileServiceClient.from_config()
         except ProfileServiceError:
             # A misconfigured URL is a server-side fault, not a browser one.
             return _envelope(
@@ -118,6 +124,10 @@ def setup_profile_service_routes() -> APIRouter:
         """
         try:
             return _forward(await coro)
+        except ProfileServiceRequestError as exc:
+            # The browser sent something unusable. Caught before the base class
+            # below, which would otherwise blame the provider for a 502.
+            return _envelope(400, "invalid_request_body", str(exc))
         except ProfileServiceUnauthorized:
             return _envelope(
                 502,
@@ -143,8 +153,41 @@ def setup_profile_service_routes() -> APIRouter:
                 "The configured ProfileService is misconfigured.",
             )
 
+    async def _read_capped_request(request: Request) -> bytes | JSONResponse:
+        """Read the browser's body, enforcing the byte cap while streaming.
+
+        Mirrors the client's response-side cap. Without this the proxy buffers
+        an unbounded body before anything inspects it, and neither Outis nor
+        the upstream service imposes a request limit of its own. A trustworthy
+        declared Content-Length is refused before any body is read; the running
+        total is still checked per chunk so a chunked or length-lying request
+        cannot exceed the cap either.
+        """
+        too_large = _envelope(
+            413,
+            "request_too_large",
+            f"Request body exceeds the {MAX_PROFILE_SERVICE_REQUEST_BYTES} byte limit.",
+        )
+        declared = request.headers.get("Content-Length")
+        if declared is not None:
+            try:
+                if int(declared) > MAX_PROFILE_SERVICE_REQUEST_BYTES:
+                    return too_large
+            except ValueError:
+                pass  # untrustworthy header; the streaming check still applies
+        total = 0
+        chunks: list[bytes] = []
+        async for chunk in request.stream():
+            total += len(chunk)
+            if total > MAX_PROFILE_SERVICE_REQUEST_BYTES:
+                return too_large
+            chunks.append(chunk)
+        return b"".join(chunks)
+
     async def _json_body(request: Request) -> Any:
-        raw = await request.body()
+        raw = await _read_capped_request(request)
+        if isinstance(raw, JSONResponse):
+            return raw
         if not raw:
             return {}
         try:

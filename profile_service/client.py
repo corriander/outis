@@ -58,6 +58,18 @@ class ProfileServiceError(RuntimeError):
     """Base error: the configured ProfileService cannot be used as configured."""
 
 
+class ProfileServiceRequestError(ProfileServiceError):
+    """The *caller* supplied something this client cannot submit.
+
+    Distinct from every other error here, which describes a fault in the
+    configured service or its response. A caller fault is the browser's, so
+    the proxy answers 4xx rather than blaming the provider with a 502.
+
+    Subclasses ``ProfileServiceError`` so an existing handler that catches the
+    base still catches this; handlers that care must catch it first.
+    """
+
+
 class ProfileServiceUnavailable(ProfileServiceError):
     """The configured ProfileService could not be reached."""
 
@@ -226,7 +238,7 @@ def normalise_artifact_ref(ref: Any) -> dict:
     would have to select or translate.
     """
     if not isinstance(ref, Mapping):
-        raise ProfileServiceError("artifact_ref must be an object")
+        raise ProfileServiceRequestError("artifact_ref must be an object")
     return {key: ref[key] for key in _ARTIFACT_REF_KEYS if key in ref}
 
 

@@ -134,11 +134,12 @@ The command validates the supplied configuration, persists the provider
 credential encrypted in the normal Outis data directory, and reads it back
 before activation. It also makes a best-effort authenticated request to
 `/v1/artifacts`. Provider unavailability or rejected credentials do not block
-configuration: the command succeeds with `verified: false` and a non-secret
-`warning`, and the Cookbook inventory shows its normal unavailable state until
-the provider responds. Re-run the same idempotent command later to record a
-successful verification. Invalid local input, such as a malformed URL or
-missing credential, still fails without replacing the active configuration.
+configuration: for configuration that is new or changed the command succeeds
+with `verified: false` and a non-secret `warning`, and the Cookbook inventory
+shows its normal unavailable state until the provider responds. Re-run the same
+idempotent command later to record a successful verification. Invalid local
+input, such as a malformed URL or missing credential, still fails without
+replacing the active configuration.
 
 The JSON result contains an opaque `revision` for a deployment manager to
 attest, but never a password or bearer value. Inspect the non-secret state
@@ -173,7 +174,16 @@ docker compose run --rm --no-deps \
 
 ProfileService is optional and verified independently, by a best-effort
 request to `/v1/service`. As with the inventory provider, an unreachable
-service is saved with `verified: false` and a warning rather than refused.
+service does not block configuration.
+
+`verified` means "this exact configuration has been reached successfully at
+some point", not "was reachable during this run". Newly supplied or changed
+configuration that cannot be reached is saved with `verified: false` and a
+warning. Re-running with **unchanged** inputs while the provider happens to be
+down keeps the existing `verified: true` and its original `verified_at`: the
+configuration is not in question, only the provider's availability, which is
+runtime health rather than bootstrap state. Change any of a role's inputs and
+verification starts again from false.
 
 A deployment may deliberately give both roles the same endpoint and bearer,
 but neither role is ever inferred from the other: configuring an ArtifactStore

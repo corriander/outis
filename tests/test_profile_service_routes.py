@@ -106,7 +106,7 @@ class FakeClient:
 
 def _install(monkeypatch, client):
     monkeypatch.setenv("AUTH_ENABLED", "false")
-    monkeypatch.setattr(psr.ProfileServiceClient, "from_env", lambda: client)
+    monkeypatch.setattr(psr.ProfileServiceClient, "from_config", lambda: client)
 
 
 # -- admin & configuration gates ------------------------------------------
@@ -115,7 +115,7 @@ def _install(monkeypatch, client):
 @pytest.mark.asyncio
 async def test_route_requires_admin(monkeypatch):
     monkeypatch.delenv("AUTH_ENABLED", raising=False)
-    monkeypatch.setattr(psr.ProfileServiceClient, "from_env", lambda: FakeClient())
+    monkeypatch.setattr(psr.ProfileServiceClient, "from_config", lambda: FakeClient())
     endpoint = _endpoint("/api/cookbook/profile-service/profiles", "GET")
 
     with pytest.raises(HTTPException) as exc:
@@ -126,7 +126,7 @@ async def test_route_requires_admin(monkeypatch):
 @pytest.mark.asyncio
 async def test_unconfigured_provider_returns_501(monkeypatch):
     monkeypatch.setenv("AUTH_ENABLED", "false")
-    monkeypatch.setattr(psr.ProfileServiceClient, "from_env", lambda: None)
+    monkeypatch.setattr(psr.ProfileServiceClient, "from_config", lambda: None)
     endpoint = _endpoint("/api/cookbook/profile-service/profiles", "GET")
 
     response = await endpoint(_request("/api/cookbook/profile-service/profiles"))
@@ -401,7 +401,7 @@ async def test_no_location_when_upstream_omits_it(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_invalid_configured_url_returns_502(monkeypatch):
-    # Do not patch from_env: let the real constructor reject the bad URL and the
+    # Do not patch from_config: let the real constructor reject the bad URL and the
     # proxy map that construction failure into the structured envelope.
     monkeypatch.setenv("AUTH_ENABLED", "false")
     monkeypatch.setenv("OUTIS_PROFILE_SERVICE_URL", "not a valid url")
@@ -424,6 +424,149 @@ async def test_non_object_json_body_is_rejected(monkeypatch, raw):
     )
     assert response.status_code == 400
     assert _body(response)["errors"][0]["code"] == "invalid_request_body"
+
+
+def _chunked_request(path: str, chunks: list[bytes], *, headers=None) -> Request:
+    """A request whose body arrives in several ASGI messages."""
+    header_list = [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()]
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": path,
+        "headers": header_list,
+        "app": FastAPI(),
+    }
+    remaining = list(chunks)
+    sent = []
+
+    async def receive():
+        if not remaining:
+            return {"type": "http.request", "body": b"", "more_body": False}
+        chunk = remaining.pop(0)
+        sent.append(chunk)
+        return {"type": "http.request", "body": chunk, "more_body": bool(remaining)}
+
+    request = Request(scope, receive)
+    request.state.sent_chunks = sent
+    return request
+
+
+@pytest.mark.asyncio
+async def test_oversize_request_body_is_refused(monkeypatch):
+    _install(monkeypatch, FakeClient(result=ProfileServiceResponse(200, {})))
+    endpoint = _endpoint("/api/cookbook/profile-service/preview", "POST")
+    oversize = b"x" * (psr.MAX_PROFILE_SERVICE_REQUEST_BYTES + 1)
+
+    response = await endpoint(
+        _request("/api/cookbook/profile-service/preview", "POST", body=oversize)
+    )
+
+    assert response.status_code == 413
+    assert _body(response)["errors"][0]["code"] == "request_too_large"
+
+
+@pytest.mark.asyncio
+async def test_a_chunked_body_is_abandoned_partway_rather_than_fully_read(monkeypatch):
+    """The cap is a running total, not a check on the assembled body.
+
+    Each chunk is under the limit; only their sum exceeds it. The proxy must
+    stop reading once the total crosses, leaving later chunks unrequested.
+    """
+    _install(monkeypatch, FakeClient(result=ProfileServiceResponse(200, {})))
+    endpoint = _endpoint("/api/cookbook/profile-service/preview", "POST")
+    # Four of these sum to exactly the cap, which is not over it; the fifth
+    # crosses. A sixth is offered and must never be requested.
+    chunk = b"x" * (psr.MAX_PROFILE_SERVICE_REQUEST_BYTES // 4)
+    request = _chunked_request("/api/cookbook/profile-service/preview", [chunk] * 6)
+
+    response = await endpoint(request)
+
+    assert response.status_code == 413
+    assert len(request.state.sent_chunks) == 5
+
+
+@pytest.mark.asyncio
+async def test_a_lying_content_length_does_not_get_past_the_cap(monkeypatch):
+    """The declared length is a hint, not the check."""
+    _install(monkeypatch, FakeClient(result=ProfileServiceResponse(200, {})))
+    endpoint = _endpoint("/api/cookbook/profile-service/preview", "POST")
+    oversize = b"x" * (psr.MAX_PROFILE_SERVICE_REQUEST_BYTES + 1)
+
+    response = await endpoint(
+        _request(
+            "/api/cookbook/profile-service/preview",
+            "POST",
+            headers={"Content-Length": "10"},
+            body=oversize,
+        )
+    )
+
+    assert response.status_code == 413
+
+
+@pytest.mark.asyncio
+async def test_a_body_within_the_cap_is_still_accepted(monkeypatch):
+    client = FakeClient(result=ProfileServiceResponse(200, {"data": {}, "warnings": []}))
+    _install(monkeypatch, client)
+    endpoint = _endpoint("/api/cookbook/profile-service/preview", "POST")
+    values = {"note": "y" * 1024}
+
+    response = await endpoint(
+        _request(
+            "/api/cookbook/profile-service/preview", "POST", body={"values": values}
+        )
+    )
+
+    assert response.status_code == 200
+    assert client.calls["preview"]["values"] == values
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/api/cookbook/profile-service/draft", {"artifact_ref": "not-an-object"}),
+        ("/api/cookbook/profile-service/draft", {}),
+        (
+            "/api/cookbook/profile-service/profiles",
+            {"artifact_ref": ["not", "an", "object"], "values": {}},
+        ),
+        ("/api/cookbook/profile-service/profiles", {"values": {}}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_unusable_artifact_ref_is_the_browsers_fault_not_the_providers(
+    monkeypatch, path, body
+):
+    """A malformed request must not be reported as a provider fault.
+
+    Uses the real client rather than the fake, so the rejection comes from the
+    same validation the browser would actually hit. A 502 here would send
+    someone debugging the editor island looking at the wrong system.
+    """
+    monkeypatch.setenv("AUTH_ENABLED", "false")
+    real = psr.ProfileServiceClient(
+        "https://profile.invalid", token=TOKEN, transport=_never_called_transport()
+    )
+    monkeypatch.setattr(psr.ProfileServiceClient, "from_config", lambda: real)
+    endpoint = _endpoint(path, "POST")
+
+    response = await endpoint(_request(path, "POST", body=body))
+
+    assert response.status_code == 400
+    assert _body(response)["errors"][0]["code"] == "invalid_request_body"
+    # The provider is never contacted for a request we could not have submitted.
+    assert TOKEN not in bytes(response.body).decode()
+
+
+def _never_called_transport():
+    import httpx
+
+    def handler(request):  # pragma: no cover - reaching it is the failure
+        raise AssertionError(
+            f"upstream must not be contacted for an invalid request: {request.url}"
+        )
+
+    return httpx.MockTransport(handler)
 
 
 @pytest.mark.asyncio

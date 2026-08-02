@@ -573,6 +573,63 @@ async def test_a_later_successful_verification_retains_the_revision(
 
 
 @pytest.mark.asyncio
+async def test_an_unchanged_role_stays_verified_when_the_provider_is_down(
+    bootstrap_state, monkeypatch
+):
+    """`verified` means ever-reached for this config, not reachable right now.
+
+    A wrapper that re-runs apply on every deploy must not downgrade a healthy
+    deployment to unverified just because the provider happened to be
+    restarting. Provider availability is runtime health; this flag is
+    bootstrap state.
+    """
+    _set_inputs(monkeypatch)
+    _set_profile_inputs(monkeypatch)
+    first = await bootstrap_state["bootstrap"].apply_bootstrap(
+        transport=_both_roles_transport()
+    )
+    assert first["verified"] is True
+    first_verified_at = first["profile_service"]["verified_at"]
+    assert first_verified_at
+
+    second = await bootstrap_state["bootstrap"].apply_bootstrap(
+        transport=_unreachable_transport()
+    )
+
+    assert second["verified"] is True
+    assert second["artifact_store"]["verified"] is True
+    assert second["profile_service"]["verified"] is True
+    # The original timestamp stands; this run proved nothing new.
+    assert second["profile_service"]["verified_at"] == first_verified_at
+    assert second["changed"] is False
+    assert second["revision"] == first["revision"]
+    assert "could not be verified" in second["warning"]
+
+
+@pytest.mark.asyncio
+async def test_changed_inputs_start_verification_again_from_false(
+    bootstrap_state, monkeypatch
+):
+    _set_inputs(monkeypatch)
+    _set_profile_inputs(monkeypatch)
+    await bootstrap_state["bootstrap"].apply_bootstrap(
+        transport=_both_roles_transport()
+    )
+
+    # A different bearer is different configuration: the prior success says
+    # nothing about it, so it cannot inherit that verification.
+    _set_profile_inputs(monkeypatch, token="rotated-profile-token")
+    second = await bootstrap_state["bootstrap"].apply_bootstrap(
+        transport=_unreachable_transport()
+    )
+
+    assert second["profile_service"]["verified"] is False
+    assert second["profile_service"]["verified_at"] is None
+    assert second["verified"] is False
+    assert second["changed"] is True
+
+
+@pytest.mark.asyncio
 async def test_status_reports_both_roles_without_reconverging(
     bootstrap_state, monkeypatch
 ):

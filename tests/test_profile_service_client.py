@@ -21,6 +21,7 @@ from profile_service.client import (
     ProfileServiceClient,
     ProfileServiceError,
     ProfileServiceInvalid,
+    ProfileServiceRequestError,
     ProfileServiceUnauthorized,
     ProfileServiceUnavailable,
     normalise_artifact_ref,
@@ -404,9 +405,14 @@ def test_normalise_artifact_ref_keeps_only_wire_keys():
     assert out == {"authority": "a", "artifact_id": "b", "observation": "c"}
 
 
-def test_normalise_artifact_ref_rejects_non_mapping():
+@pytest.mark.parametrize("bad", ["not-a-ref", ["a"], 42, None, True])
+def test_normalise_artifact_ref_rejects_non_mapping(bad):
+    # Raised as a *request* error: the caller supplied this, not the provider.
+    # Still a ProfileServiceError, so existing handlers keep catching it.
+    with pytest.raises(ProfileServiceRequestError):
+        normalise_artifact_ref(bad)
     with pytest.raises(ProfileServiceError):
-        normalise_artifact_ref("not-a-ref")
+        normalise_artifact_ref(bad)
 
 
 # -- streamed response-size limit -----------------------------------------

@@ -217,6 +217,12 @@ The ProfileService and ArtifactStore roles are selected independently. Pointing
 both at the same endpoint is a legitimate deployment choice, but configuring
 one never configures the other.
 
+Both directions through the proxy are size-capped at 5 MiB, enforced
+incrementally while the body streams so an oversize or length-lying message is
+abandoned rather than buffered first. An oversize browser request is refused
+with `413 request_too_large`; an oversize upstream response becomes
+`502 profile_service_invalid`.
+
 Outis reaches the service server-side only, with redirects disabled and ambient
 proxy environment ignored. A same-origin proxy under
 `/api/cookbook/profile-service` exposes the contract to the browser behind the
