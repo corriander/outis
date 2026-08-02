@@ -24,13 +24,20 @@ correctly without flattening the provider's structured field/profile errors:
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Mapping
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+
+from profile_service.config import (
+    DEFAULT_PROVIDER_NAME,
+    ProfileServiceConfiguration,
+    ProfileServiceConfigurationError,
+    persisted_configuration_present,
+    resolve_profile_service_configuration,
+    validated_base_url,
+)
 
 
 # Discovery, form, and profile documents are small. A generous ceiling still
@@ -194,37 +201,21 @@ class ProfileServiceResponse:
 
 
 def configured_profile_service_name() -> str:
-    return (
-        os.getenv("OUTIS_PROFILE_SERVICE_NAME", "external-profile-service").strip()
-        or "external-profile-service"
-    )
+    try:
+        configuration = resolve_profile_service_configuration()
+    except ProfileServiceConfigurationError:
+        return DEFAULT_PROVIDER_NAME
+    return configuration.name if configuration else DEFAULT_PROVIDER_NAME
 
 
 def profile_service_configured() -> bool:
-    return bool(os.getenv("OUTIS_PROFILE_SERVICE_URL", "").strip())
-
-
-def _configured_timeout() -> float:
     try:
-        value = float(os.getenv("OUTIS_PROFILE_SERVICE_TIMEOUT", "10") or "10")
-    except ValueError:
-        return 10.0
-    return max(0.5, min(value, 60.0))
-
-
-def _validated_base_url(value: str) -> str:
-    raw = value.strip().rstrip("/")
-    try:
-        parsed = urlsplit(raw)
-    except ValueError as exc:
-        raise ProfileServiceError("ProfileService URL is invalid") from exc
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ProfileServiceError("ProfileService URL must be an absolute HTTP(S) URL")
-    if parsed.username or parsed.password or parsed.query or parsed.fragment:
-        raise ProfileServiceError(
-            "ProfileService URL must not contain credentials, query, or fragment"
-        )
-    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
+        return resolve_profile_service_configuration() is not None
+    except ProfileServiceConfigurationError:
+        # A present-but-invalid persisted file is still an intended external
+        # provider. Advertise the capability so its proxy reports a 502 config
+        # fault rather than pretending the service was never configured.
+        return persisted_configuration_present()
 
 
 def normalise_artifact_ref(ref: Any) -> dict:
@@ -248,7 +239,10 @@ class ProfileServiceClient:
         name: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ):
-        self.base_url = _validated_base_url(base_url)
+        try:
+            self.base_url = validated_base_url(base_url)
+        except ProfileServiceConfigurationError as exc:
+            raise ProfileServiceError(str(exc)) from exc
         self.token = token.strip() if token else None
         self.timeout_seconds = timeout_seconds
         self.name = (name.strip() if name else None) or configured_profile_service_name()
@@ -258,16 +252,33 @@ class ProfileServiceClient:
         self._transport = transport
 
     @classmethod
-    def from_env(cls) -> "ProfileServiceClient | None":
-        base_url = os.getenv("OUTIS_PROFILE_SERVICE_URL", "").strip()
-        if not base_url:
+    def from_configuration(
+        cls,
+        configuration: ProfileServiceConfiguration | None,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> "ProfileServiceClient | None":
+        if configuration is None:
             return None
         return cls(
-            base_url,
-            token=os.getenv("OUTIS_PROFILE_SERVICE_TOKEN", "").strip() or None,
-            timeout_seconds=_configured_timeout(),
-            name=os.getenv("OUTIS_PROFILE_SERVICE_NAME", "").strip() or None,
+            configuration.base_url,
+            token=configuration.token,
+            timeout_seconds=configuration.timeout_seconds,
+            name=configuration.name,
+            transport=transport,
         )
+
+    @classmethod
+    def from_config(cls) -> "ProfileServiceClient | None":
+        try:
+            return cls.from_configuration(resolve_profile_service_configuration())
+        except ProfileServiceConfigurationError as exc:
+            raise ProfileServiceError(str(exc)) from exc
+
+    @classmethod
+    def from_env(cls) -> "ProfileServiceClient | None":
+        """Backward-compatible name for the unified configuration resolver."""
+        return cls.from_config()
 
     # -- transport ---------------------------------------------------------
 
