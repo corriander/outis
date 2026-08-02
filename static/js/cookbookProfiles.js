@@ -62,6 +62,10 @@ let _form = null;
 let _profiles = [];
 let _state = createEditorState();
 let _artifactContext = null;
+// Describes the artifact the OPEN profile is bound to, which is not the same
+// thing as the inventory's current selection and must never be re-derived from
+// it: the binding is fixed when the draft is seeded or the profile is read.
+let _boundArtifact = null;
 let _loaded = false;
 let _busy = false;
 let _previewTimer = null;
@@ -282,10 +286,31 @@ function _setStatus(message, kind = '') {
   node.classList.toggle('is-empty', kind === 'empty');
 }
 
+function _artifactLabel(artifact) {
+  return artifact.filename || artifact.logical_path || artifact.id;
+}
+
+function _refLabel(ref) {
+  if (!ref || typeof ref.artifact_id !== 'string' || !ref.artifact_id) return null;
+  return ref.artifact_id;
+}
+
 function _renderContext() {
   const node = _el('cookbook-profile-context');
   const create = _el('cookbook-profile-new');
   if (!node) return;
+  // A profile exists to launch one specific artifact, so while one is open the
+  // line names the artifact THAT profile is bound to. Showing the inventory's
+  // current selection here would misreport the single most load-bearing fact
+  // about the draft the moment the operator browsed anywhere else.
+  if (_state.mode !== 'idle') {
+    node.textContent = _boundArtifact
+      ? `Profile for: ${_boundArtifact}`
+      : 'This profile records no artifact.';
+    node.classList.toggle('is-error', !_boundArtifact);
+    if (create) create.disabled = _busy || !_artifactContext || !_form;
+    return;
+  }
   if (!_artifactContext || !_form) {
     node.textContent = 'Select an artifact in the Inventory tab to start a profile.';
     node.classList.remove('is-error');
@@ -382,6 +407,24 @@ async function _loadProfileList({ fetchImpl = globalThis.fetch } = {}) {
   if (!listed.ok) throw new Error(_envelopeMessage(listed.body) || `Profile list failed (HTTP ${listed.status})`);
   _profiles = profileSummaries(listed.body);
   _renderProfileList();
+  _announceProfileCoverage();
+}
+
+/** Tell the Inventory island how many profiles each artifact has.
+ *
+ * An artifact with no profile is downloaded weight that nothing can launch,
+ * and the inventory is where that is noticed or forgotten. The count travels
+ * as an event because the two islands stay independent; inventory renders
+ * nothing until it hears this, so an unconfigured provider never paints
+ * "No profile" over artifacts it knows nothing about.
+ */
+function _announceProfileCoverage() {
+  const counts = {};
+  for (const profile of _profiles) {
+    const id = _refLabel(profile.artifact_ref);
+    if (id) counts[id] = (counts[id] || 0) + 1;
+  }
+  document.dispatchEvent(new CustomEvent('cookbook:profile-coverage', { detail: { counts } }));
 }
 
 function _envelopeMessage(body) {
@@ -393,6 +436,9 @@ function _envelopeMessage(body) {
 
 async function _startDraft({ fetchImpl = globalThis.fetch } = {}) {
   if (!_artifactContext || !_form) return;
+  // Seeding replaces whatever is open, so it asks first for the same reason
+  // switching profiles does.
+  if (isDirty(_state) && !(await _confirmDiscard())) return;
   const ref = artifactRefFor(_artifactContext.provider, _artifactContext.artifact);
   if (!ref) {
     _setStatus('That artifact does not carry the identity the service needs.', 'error');
@@ -407,6 +453,7 @@ async function _startDraft({ fetchImpl = globalThis.fetch } = {}) {
       return;
     }
     _state = beginDraft(_state, _form, draft.body, ref);
+    _boundArtifact = _artifactLabel(_artifactContext.artifact);
     _setStatus('Draft seeded from the selected artifact. Nothing is saved yet.');
     _renderAll();
   } catch (error) {
@@ -443,6 +490,7 @@ async function _openProfile(profileId, { fetchImpl = globalThis.fetch } = {}) {
       return;
     }
     _state = beginEdit(_state, _form, profile, read.etag);
+    _boundArtifact = _refLabel(profile.artifact_ref);
     _setStatus(`Editing ${profile.id}.`);
     _renderAll();
   } catch (error) {
@@ -577,6 +625,7 @@ async function _delete({ fetchImpl = globalThis.fetch } = {}) {
       return;
     }
     _state = clearEditor(_state);
+    _boundArtifact = null;
     await _loadProfileList({ fetchImpl });
     _setStatus(`Deleted ${profileId}.`);
     _renderAll();
@@ -671,6 +720,7 @@ export function initProfiles({ available = false, provider = null } = {}) {
     _service = null;
     _profiles = [];
     _state = createEditorState();
+    _boundArtifact = null;
     _loaded = false;
   }
   _available = available === true;

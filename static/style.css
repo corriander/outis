@@ -22659,6 +22659,18 @@ body.gallery-selecting .gallery-dl-btn,
   color: var(--red);
 }
 
+.cookbook-inventory-profiled {
+  color: var(--green);
+}
+
+/* An artifact nothing can launch is the thing worth spotting in a long list,
+   so this chip is the one that does not fade into the row. */
+.cookbook-inventory-unprofiled {
+  border-color: var(--warn);
+  color: var(--warn);
+  opacity: 1;
+}
+
 .cookbook-inventory-size {
   min-width: 56px;
   color: var(--fg);
