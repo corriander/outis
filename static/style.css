@@ -22784,6 +22784,315 @@ body.gallery-selecting .gallery-dl-btn,
   }
 }
 
+/* Provider-backed profile authoring. The form is rendered from the service's
+   own field document, so every rule here is keyed on the generic widget
+   vocabulary rather than on any particular profile field. */
+.cookbook-group[data-backend-group="Profiles"] > .cookbook-profile-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.cookbook-profile-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.cookbook-profile-heading h2 {
+  margin: 0;
+  padding: 0;
+  line-height: 1;
+}
+
+.cookbook-profile-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.cookbook-profile-context {
+  flex: 1;
+  overflow: hidden;
+  color: var(--fg);
+  font-size: 10px;
+  opacity: 0.7;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cookbook-profile-context.is-error {
+  color: var(--red);
+  opacity: 0.9;
+}
+
+#cookbook-profile-provider {
+  max-width: 32%;
+  overflow: hidden;
+  color: var(--fg);
+  font-size: 10px;
+  opacity: 0.55;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cookbook-profile-status {
+  margin: 8px 1px 5px;
+  color: var(--fg);
+  font-size: 10px;
+  opacity: 0.62;
+}
+
+.cookbook-profile-status.is-error {
+  color: var(--red);
+  opacity: 0.9;
+}
+
+.cookbook-profile-body {
+  display: grid;
+  grid-template-columns: minmax(120px, 190px) minmax(0, 1fr);
+  gap: 12px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.cookbook-profile-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  padding-right: 8px;
+}
+
+.cookbook-profile-entry {
+  border: 1px solid transparent;
+  border-radius: 5px;
+  padding: 5px 7px;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: 10px;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.cookbook-profile-entry:hover,
+.cookbook-profile-entry.is-active {
+  border-color: var(--border);
+  background: var(--bg-2, rgba(127, 127, 127, 0.08));
+}
+
+.cookbook-profile-empty {
+  color: var(--fg);
+  font-size: 9px;
+  opacity: 0.5;
+  padding: 4px 2px;
+}
+
+.cookbook-profile-editor {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.cookbook-profile-editor-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 6px;
+}
+
+.cookbook-profile-editor-heading h3 {
+  margin: 0;
+  color: var(--fg);
+  font-size: 11px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.cookbook-profile-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 5px;
+}
+
+.cookbook-profile-banner:empty {
+  display: none;
+}
+
+.cookbook-profile-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 7px;
+}
+
+.cookbook-profile-message {
+  border-radius: 5px;
+  padding: 5px 7px;
+  background: var(--bg-2, rgba(127, 127, 127, 0.08));
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.cookbook-profile-message.is-error {
+  color: var(--red);
+}
+
+.cookbook-profile-message.is-warning {
+  color: var(--fg);
+  opacity: 0.78;
+}
+
+.cookbook-profile-conflict {
+  border: 1px solid var(--red);
+  border-radius: 5px;
+  padding: 7px 8px;
+}
+
+.cookbook-profile-conflict p {
+  margin: 0 0 6px;
+  color: var(--red);
+  font-size: 10px;
+}
+
+.cookbook-profile-conflict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.cookbook-profile-form {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.cookbook-profile-group h3 {
+  margin: 0 0 5px;
+  color: var(--fg);
+  font-size: 8px;
+  font-weight: 600;
+  opacity: 0.48;
+  text-transform: uppercase;
+}
+
+.cookbook-profile-group-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px 12px;
+}
+
+.cookbook-profile-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.cookbook-profile-label {
+  color: var(--fg);
+  font-size: 9px;
+  opacity: 0.72;
+}
+
+.cookbook-profile-required {
+  margin-left: 2px;
+  color: var(--red);
+}
+
+.cookbook-profile-input,
+.cookbook-profile-select {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 4px 7px;
+  background: var(--card);
+  color: var(--fg);
+  font: inherit;
+  font-size: 10px;
+}
+
+.cookbook-profile-input[aria-invalid="true"],
+.cookbook-profile-select[aria-invalid="true"] {
+  border-color: var(--red);
+}
+
+.cookbook-profile-toggle {
+  align-self: flex-start;
+  margin: 2px 0;
+}
+
+.cookbook-profile-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 9px;
+  padding: 2px 0;
+}
+
+.cookbook-profile-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--fg);
+  font-size: 10px;
+}
+
+.cookbook-profile-help:empty,
+.cookbook-profile-feedback:empty {
+  display: none;
+}
+
+.cookbook-profile-help {
+  color: var(--fg);
+  font-size: 9px;
+  opacity: 0.5;
+}
+
+.cookbook-profile-feedback {
+  font-size: 9px;
+}
+
+.cookbook-profile-feedback.is-error {
+  color: var(--red);
+}
+
+.cookbook-profile-feedback.is-hint {
+  color: var(--fg);
+  opacity: 0.62;
+}
+
+@media (max-width: 768px) {
+  .cookbook-profile-body {
+    grid-template-columns: 1fr;
+  }
+
+  .cookbook-profile-list {
+    flex-direction: row;
+    flex-wrap: wrap;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding: 0 0 6px;
+  }
+
+  #cookbook-profile-provider {
+    display: none;
+  }
+
+  .cookbook-profile-toolbar {
+    flex-wrap: wrap;
+  }
+}
+
 /* Section titles */
 .cookbook-section-title {
   font-size: 12px;

@@ -8,7 +8,7 @@ const FALLBACK = Object.freeze({
   capabilities: {
     catalogue: { provider: 'huggingface', browse: true, inspect: true },
     artifact_store: { provider: null, list: false, acquire: false, delete: false },
-    profile_service: { provider: null, read: false, write: false },
+    profile_service: { provider: null, read: false, write: false, external: false },
     runtime_controller: { provider: null, status: false, start: false, stop: false, logs: false },
   },
 });
@@ -22,12 +22,19 @@ export function cookbookUiPolicy(document) {
   const runtime = capabilities.runtime_controller || {};
   const inventoryProvider = artifactStore.operation_providers?.list || artifactStore.provider || null;
   const inventory = artifactStore.list === true && inventoryProvider !== 'odysseus-native';
+  // The external authoring island is keyed on `external`, never on
+  // `read`/`write`: those gate the inherited host-side profile routes and stay
+  // native-only, so an external provider must not switch them on.
+  const profileProvider = profiles.operation_providers?.write || profiles.provider || null;
+  const profileEditor = profiles.external === true && profileProvider !== 'odysseus-native';
   return {
     browse: capabilities.catalogue?.browse !== false,
     inventory,
     inventoryProvider: inventory ? inventoryProvider : null,
     download: artifactStore.acquire === true,
     profiles: profiles.write === true,
+    profileEditor,
+    profileProvider: profileEditor ? profileProvider : null,
     launch: runtime.start === true,
     nativeSettings: document?.mode === 'native',
   };
