@@ -2,10 +2,13 @@ name: ci / docker publish
 
 # Build the Outis image and publish to GHCR. Four lanes, one build pipeline:
 #
-#   push to main       -> :latest                     (rolling tip of main)
-#   push to dev        -> :dev, :X.Y.Z-dev.<sha>      (rolling dev + immutable pin)
-#   workflow_call      -> :X.Y.Z                      (immutable release tag)
+#   workflow_call      -> :X.Y.Z, :latest             (immutable release + newest release)
+#   push to main       -> :main, :main-<sha>          (rolling tip of main + immutable pin)
+#   push to dev        -> :dev, :dev-<sha>            (rolling dev + immutable pin)
 #   workflow_dispatch  -> :preview-<branch>-<sha>     (immutable ad-hoc preview)
+#
+# `:latest` means the newest release, not the tip of main. Deployments that want
+# merged-but-unreleased code ask for `:main` explicitly.
 #
 # Why the release lane is `workflow_call` and not `on: push: tags:`
 # ----------------------------------------------------------------
@@ -49,7 +52,9 @@ on:
 
 # `inputs.version` is empty for push and workflow_dispatch, so a release run
 # never shares a concurrency group with the push-to-main run for the same
-# commit and the two cannot cancel each other.
+# commit and the two cannot cancel each other. They can therefore overlap, which
+# is safe: the two lanes write disjoint tag sets (`latest` + semver against
+# `main` + `main-<sha>`), so neither can clobber the other's tags.
 concurrency:
   group: docker-publish-${{ github.event_name }}-${{ github.ref }}-${{ inputs.version }}
   cancel-in-progress: true
@@ -156,13 +161,9 @@ jobs:
             primary="${preview}"
           elif [ "${GITHUB_REF}" = "refs/heads/main" ]; then
             mode="main"
-            primary="latest"
+            primary="main"
           elif [ "${GITHUB_REF}" = "refs/heads/dev" ]; then
             mode="dev"
-            # The dev lane pins against the in-tree APP_VERSION, which the
-            # release automation owns on main.
-            version=$(grep -E '^APP_VERSION' src/constants.py | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
-            [ -n "${version}" ] || { echo "::error::APP_VERSION not found"; exit 1; }
             primary="dev"
           else
             echo "::error::No publish lane for event=${EVENT_NAME} ref=${GITHUB_REF}"
@@ -197,10 +198,12 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest,enable=${{ steps.ctx.outputs.mode == 'main' }}
+            type=raw,value=latest,enable=${{ steps.ctx.outputs.mode == 'release' }}
             type=raw,value=${{ steps.ctx.outputs.version }},enable=${{ steps.ctx.outputs.mode == 'release' }}
+            type=raw,value=main,enable=${{ steps.ctx.outputs.mode == 'main' }}
+            type=raw,value=main-${{ steps.ctx.outputs.short }},enable=${{ steps.ctx.outputs.mode == 'main' }}
             type=raw,value=dev,enable=${{ steps.ctx.outputs.mode == 'dev' }}
-            type=raw,value=${{ steps.ctx.outputs.version }}-dev.${{ steps.ctx.outputs.short }},enable=${{ steps.ctx.outputs.mode == 'dev' }}
+            type=raw,value=dev-${{ steps.ctx.outputs.short }},enable=${{ steps.ctx.outputs.mode == 'dev' }}
             type=raw,value=${{ steps.ctx.outputs.preview }},enable=${{ steps.ctx.outputs.mode == 'preview' }}
       - name: Create manifest list + push tags
         working-directory: /tmp/digests

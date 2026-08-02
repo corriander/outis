@@ -43,8 +43,9 @@ cd outis
 `deploy` is the canonical command after a configuration change or a new
 release: it validates and injects configuration through Varlock, pulls
 `ghcr.io/corriander/outis:${OUTIS_TAG:-latest}`, and recreates the `odysseus`
-service. Set `OUTIS_TAG` to a released version to pin the deployment; the
-default `latest` tracks `main`.
+service. The default `latest` is the newest release; set `OUTIS_TAG` to a
+specific released version to pin the deployment, or to `main` to track the tip
+of `main` instead.
 
 To deploy your own working tree instead of a published image, add `--build`:
 
@@ -174,10 +175,12 @@ Images are published to `ghcr.io/corriander/outis` for `linux/amd64` and
 
 | Tag | Meaning |
 | --- | --- |
-| `latest` | Tip of `main`. Moves. The default. |
+| `latest` | The newest release. Moves on each release. The default. |
 | `X.Y.Z` | A release. Immutable — the reproducible choice for a deployment. |
+| `main` | Tip of `main`. Moves. Merged but unreleased. |
+| `main-<sha>` | An immutable pin of a specific `main` commit. |
 | `dev` | Tip of `dev`. Moves; expect breakage. |
-| `X.Y.Z-dev.<sha>` | An immutable pin of a specific `dev` commit. |
+| `dev-<sha>` | An immutable pin of a specific `dev` commit. |
 | `preview-<branch>-<sha>` | An immutable ad-hoc build of a branch. |
 
 Preview images are not built automatically. A maintainer publishes one by

@@ -128,8 +128,9 @@ version number by hand.
   Conventional Commits accumulated since the last release and the version they
   imply. Nothing ships while that PR is open.
 - Merging the release PR bumps `APP_VERSION` in `src/constants.py`, updates
-  `CHANGELOG.md`, tags `outis-vX.Y.Z`, publishes the GitHub release, and
-  publishes the matching `ghcr.io/corriander/outis:X.Y.Z` image.
+  `CHANGELOG.md`, tags `outis-vX.Y.Z`, publishes the GitHub release, publishes
+  the matching `ghcr.io/corriander/outis:X.Y.Z` image, and repoints `:latest`
+  at it.
 
 While the project is on a `0.x` stream, `feat` bumps the minor version and
 `fix` bumps the patch. A commit marked breaking (`feat!:` or a
