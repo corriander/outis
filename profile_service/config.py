@@ -25,6 +25,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from core.atomic_io import atomic_write_json
 from src.constants import PROFILE_SERVICE_CANDIDATE_FILE, PROFILE_SERVICE_CONFIG_FILE
+from src.managed_transaction import ManagedTransactionError, load_transaction
 from src.secret_storage import decrypt, encrypt
 
 
@@ -126,6 +127,13 @@ def _configuration_from_document(document: dict, *, source: str) -> ProfileServi
     if not isinstance(entry, dict):
         raise ProfileServiceConfigurationError("ProfileService configuration is missing")
     token = _decrypt_token(entry.get("token"))
+    # The revision and the managed administrator describe the bootstrap run,
+    # not this role, so they come from the transaction record shared with
+    # ArtifactStore.
+    try:
+        transaction = load_transaction()
+    except ManagedTransactionError as exc:
+        raise ProfileServiceConfigurationError(str(exc)) from exc
     return ProfileServiceConfiguration(
         base_url=validated_base_url(str(entry.get("base_url") or "")),
         token=token,
@@ -133,11 +141,11 @@ def _configuration_from_document(document: dict, *, source: str) -> ProfileServi
         or DEFAULT_PROVIDER_NAME,
         timeout_seconds=normalized_timeout(entry.get("timeout_seconds")),
         source=source,
-        revision=str(document.get("revision") or "").strip() or None,
+        revision=transaction.revision if transaction else None,
         verified=bool(document.get("verified")),
         verified_at=str(document.get("verified_at") or "").strip() or None,
         managed_admin_username=(
-            str(document.get("managed_admin_username") or "").strip().lower() or None
+            transaction.managed_admin_username if transaction else None
         ),
     )
 
@@ -231,12 +239,13 @@ def activate_candidate(
         verified_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     if not verified:
         verified_at = None
+    # ``revision`` and ``managed_admin_username`` are deliberately not written
+    # here: they belong to the transaction record, which the caller commits
+    # once for every role it converged.
     document = {
         "schema_version": CONFIG_SCHEMA_VERSION,
         "verified": verified,
         "verified_at": verified_at,
-        "revision": revision,
-        "managed_admin_username": managed_admin_username,
         "configuration": {
             "base_url": validated_base_url(configuration.base_url),
             "name": configuration.name or DEFAULT_PROVIDER_NAME,

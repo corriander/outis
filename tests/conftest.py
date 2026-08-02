@@ -66,6 +66,63 @@ if "src.database" not in sys.modules:
 # collection, which breaks session import in subsequent tests).
 import core.models  # noqa: E402
 
+import pytest  # noqa: E402
+
+@pytest.fixture(autouse=True)
+def _isolate_managed_state(tmp_path):
+    """Point managed bootstrap state at a per-test directory.
+
+    These modules resolve their paths from module-level names under ``data/``,
+    so a test that exercises them writes into the developer's real data
+    directory unless it patches every one. Worse, a leaked document is picked
+    up by *later* tests -- a persisted provider config makes unrelated
+    "unconfigured" assertions fail, and the failure surfaces far from the test
+    that caused it.
+
+    Redirecting them by default makes that impossible. Tests that need
+    specific paths still patch these attributes themselves; being set up first,
+    this fixture is torn down last, so those patches are unwound before the
+    originals are restored here.
+
+    Deliberately does not request ``monkeypatch``: an autouse conftest fixture
+    that does would pull monkeypatch's setup earlier than every module-level
+    autouse fixture, and so its teardown later than theirs. Modules that reload
+    env-dependent code on teardown then see env vars a test set but monkeypatch
+    has not yet restored.
+    """
+    import artifact_store.config as artifact_store_config
+    import profile_service.config as profile_service_config
+    import src.managed_transaction as managed_transaction
+
+    active = tmp_path / "managed_state"
+    active.mkdir()
+    overrides = (
+        (artifact_store_config, "ARTIFACT_STORE_CONFIG_FILE", "artifact_store.json"),
+        (
+            artifact_store_config,
+            "ARTIFACT_STORE_CANDIDATE_FILE",
+            "artifact_store.pending.json",
+        ),
+        (profile_service_config, "PROFILE_SERVICE_CONFIG_FILE", "profile_service.json"),
+        (
+            profile_service_config,
+            "PROFILE_SERVICE_CANDIDATE_FILE",
+            "profile_service.pending.json",
+        ),
+        (managed_transaction, "MANAGED_BOOTSTRAP_FILE", "managed_bootstrap.json"),
+        (managed_transaction, "ARTIFACT_STORE_CONFIG_FILE", "artifact_store.json"),
+    )
+
+    original = [(module, name, getattr(module, name)) for module, name, _ in overrides]
+    for module, name, filename in overrides:
+        setattr(module, name, str(active / filename))
+    try:
+        yield active
+    finally:
+        for module, name, value in original:
+            setattr(module, name, value)
+
+
 def pytest_configure(config):
     """Register the dynamic taxonomy ``sub_*`` markers before collection.
 

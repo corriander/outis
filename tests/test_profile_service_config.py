@@ -26,13 +26,22 @@ ENV_VARS = (
 @pytest.fixture
 def config_state(tmp_path, monkeypatch):
     import profile_service.config as config
+    import src.managed_transaction as managed_transaction
     import src.secret_storage as secret_storage
 
     active_path = tmp_path / "profile_service.json"
     candidate_path = tmp_path / "profile_service.pending.json"
+    transaction_path = tmp_path / "managed_bootstrap.json"
+    artifact_store_path = tmp_path / "artifact_store.json"
 
     monkeypatch.setattr(config, "PROFILE_SERVICE_CONFIG_FILE", str(active_path))
     monkeypatch.setattr(config, "PROFILE_SERVICE_CANDIDATE_FILE", str(candidate_path))
+    monkeypatch.setattr(
+        managed_transaction, "MANAGED_BOOTSTRAP_FILE", str(transaction_path)
+    )
+    monkeypatch.setattr(
+        managed_transaction, "ARTIFACT_STORE_CONFIG_FILE", str(artifact_store_path)
+    )
     monkeypatch.setattr(secret_storage, "_KEY_PATH", tmp_path / ".app_key")
     monkeypatch.setattr(secret_storage, "_fernet", None)
     for name in ENV_VARS:
@@ -41,7 +50,10 @@ def config_state(tmp_path, monkeypatch):
     return {
         "active": active_path,
         "candidate": candidate_path,
+        "transaction": transaction_path,
+        "artifact_store": artifact_store_path,
         "config": config,
+        "managed_transaction": managed_transaction,
         "secret_storage": secret_storage,
     }
 
@@ -54,20 +66,31 @@ def _set_env(monkeypatch, *, url="https://env.invalid/base/", token="env-token")
 
 
 def _persist(config_state, **overrides):
-    """Write an active managed document the way a bootstrap run would."""
+    """Write active managed state the way a bootstrap run would.
+
+    A run activates each role it converged and then commits the transaction
+    record that carries the revision and managed administrator for all of
+    them, so both halves are written here.
+    """
     config = config_state["config"]
+    revision = overrides.pop("revision", "rev-1")
+    username = overrides.pop("managed_admin_username", "ManagedAdmin")
     configuration = config.ProfileServiceConfiguration(
         base_url=overrides.pop("base_url", "https://managed.invalid"),
         token=overrides.pop("token", "managed-token"),
         name=overrides.pop("name", "Managed profiles"),
         timeout_seconds=overrides.pop("timeout_seconds", 30.0),
     )
-    return config.activate_candidate(
+    active = config.activate_candidate(
         configuration,
-        revision=overrides.pop("revision", "rev-1"),
-        managed_admin_username=overrides.pop("managed_admin_username", "ManagedAdmin"),
+        revision=revision,
+        managed_admin_username=username,
         verified=overrides.pop("verified", False),
     )
+    config_state["managed_transaction"].write_transaction(
+        revision=revision, managed_admin_username=username
+    )
+    return active
 
 
 # -- source selection ------------------------------------------------------
@@ -129,16 +152,29 @@ def test_removing_managed_state_falls_back_to_the_environment(config_state, monk
 # -- managed document integrity -------------------------------------------
 
 
-def test_persisted_document_without_a_revision_is_rejected(config_state):
+def test_role_state_without_a_committed_transaction_is_rejected(config_state):
+    """A role document is only meaningful under a committed transaction.
+
+    This is the half-written state a run leaves if it dies between activating
+    a role and committing the revision. It is reported as a configuration
+    fault rather than silently treated as usable provider state.
+    """
     config = config_state["config"]
     _persist(config_state)
 
-    document = json.loads(config_state["active"].read_text(encoding="utf-8"))
-    document.pop("revision")
-    atomic_write_json(str(config_state["active"]), document, indent=2)
+    config_state["transaction"].unlink()
 
-    with pytest.raises(config.ProfileServiceConfigurationError):
+    with pytest.raises(config.ProfileServiceConfigurationError, match="revision"):
         config.resolve_profile_service_configuration()
+
+
+def test_the_revision_is_not_stored_in_the_role_document(config_state):
+    _persist(config_state)
+
+    document = json.loads(config_state["active"].read_text(encoding="utf-8"))
+
+    assert "revision" not in document
+    assert "managed_admin_username" not in document
 
 
 def test_persisted_document_with_an_unsupported_schema_is_rejected(config_state):
