@@ -7,7 +7,9 @@
   },
   "scripts": {
     "build:inventory": "tsc -p tsconfig.inventory.json",
-    "check:inventory": "tsc -p tsconfig.inventory.json --noEmit"
+    "check:inventory": "tsc -p tsconfig.inventory.json --noEmit",
+    "build:profiles": "tsc -p tsconfig.profiles.json",
+    "check:profiles": "tsc -p tsconfig.profiles.json --noEmit"
   },
   "devDependencies": {
     "@antithesishq/bombadil": "^0.6.1",
