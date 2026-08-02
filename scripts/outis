@@ -44,11 +44,12 @@ Commands:
                 --build   Build the image from this checkout instead of
                           pulling the published one
   restart     Restart the existing Outis container without rebuilding
-  status      Show the Outis container status
+  status      Show the status of every container in the project
   logs        Follow recent Outis logs
   inventory   Exercise the configured ArtifactStore through the Outis client
   config      Validate and display the redacted Varlock configuration
-  stop        Stop the Outis container
+  stop        Stop every container in the project. Containers are preserved,
+              not removed; `deploy` and `restart` bring them back
 
 This is the deployment surface for standalone Outis deployments. If an
 external control plane or orchestrator manages this deployment, use that
@@ -110,7 +111,9 @@ case "${command}" in
     ;;
   status)
     require_command docker
-    exec docker compose -p "${COMPOSE_PROJECT}" ps odysseus
+    # Report the project for the same reason `stop` targets it: reporting the
+    # application service alone implied the application was the deployment.
+    exec docker compose -p "${COMPOSE_PROJECT}" ps
     ;;
   logs)
     require_command docker
@@ -145,7 +148,14 @@ PY
     ;;
   stop)
     require_command docker
-    exec docker compose -p "${COMPOSE_PROJECT}" stop odysseus
+    # Address the project, not the application service. Stopping only `odysseus`
+    # left the search, vector-store, and notification containers running while
+    # the operator believed the deployment was down.
+    #
+    # `stop`, deliberately, not `down`: containers and their state are preserved,
+    # which is what `deploy` and `restart` already assume. Removing them is a
+    # different promise and is not made here.
+    exec docker compose -p "${COMPOSE_PROJECT}" stop
     ;;
   -h|--help|help|"")
     usage
