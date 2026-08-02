@@ -48,6 +48,7 @@ import {
   activateProfiles,
   initProfiles,
   profilesPanelHtml,
+  refreshProfileCoverage,
 } from './cookbookProfiles.js';
 
 const STORAGE_KEY = 'cookbook-presets';
@@ -2004,6 +2005,9 @@ function _wireTabEvents(body) {
       }
       if (backend === 'Inventory') {
         activateInventory();
+        // Coverage chips must be right the first time this tab is opened, not
+        // only after a visit to Profiles.
+        refreshProfileCoverage();
       }
       if (backend === 'Profiles') {
         activateProfiles();

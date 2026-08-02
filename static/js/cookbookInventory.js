@@ -107,6 +107,7 @@ function _artifactHtml(artifact, sortMode) {
         </dl>
         ${pathVariants}
         ${fileRows ? `<div class="cookbook-inventory-files">${fileRows}</div>` : ''}
+        ${_profileCounts ? `<div class="cookbook-inventory-actions"><button type="button" class="cookbook-inventory-create-profile" data-create-profile="${esc(artifact.id)}">Create profile for this artifact</button></div>` : ''}
       </div>
     </article>`;
 }
@@ -310,6 +311,23 @@ export function initInventory({ available = false, provider = null } = {}) {
           copyButton.textContent = 'Copied';
           window.setTimeout(() => { copyButton.textContent = 'Copy'; }, 1200);
         }).catch(() => {});
+      }
+      return;
+    }
+    const createButton = event.target?.closest?.('[data-create-profile]');
+    if (createButton) {
+      // Authoring starts from the artifact, because that is where the operator
+      // notices one has no profile. Making them remember an artifact, change
+      // tab, and pick it out of a second list is the clunk this removes.
+      event.preventDefault();
+      event.stopPropagation();
+      const artifact = (_document?.artifacts || []).find(
+        candidate => candidate.id === createButton.dataset.createProfile,
+      );
+      if (artifact) {
+        document.dispatchEvent(new CustomEvent('cookbook:create-profile-for', {
+          detail: { provider: _document?.provider || null, artifact },
+        }));
       }
       return;
     }

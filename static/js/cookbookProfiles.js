@@ -66,6 +66,9 @@ let _artifactContext = null;
 // thing as the inventory's current selection and must never be re-derived from
 // it: the binding is fixed when the draft is seeded or the profile is read.
 let _boundArtifact = null;
+// An artifact chosen for an unbound profile, applied by the next save so the
+// binding travels through the same ETag-guarded write as every other edit.
+let _pendingBind = null;
 let _loaded = false;
 let _busy = false;
 let _previewTimer = null;
@@ -304,10 +307,27 @@ function _renderContext() {
   // current selection here would misreport the single most load-bearing fact
   // about the draft the moment the operator browsed anywhere else.
   if (_state.mode !== 'idle') {
-    node.textContent = _boundArtifact
-      ? `Profile for: ${_boundArtifact}`
-      : 'This profile records no artifact.';
-    node.classList.toggle('is-error', !_boundArtifact);
+    node.textContent = '';
+    if (_boundArtifact) {
+      node.appendChild(document.createTextNode(`Profile for: ${_boundArtifact}`));
+    } else if (_pendingBind) {
+      node.appendChild(document.createTextNode(`Will bind to ${_pendingBind.label} when saved.`));
+    } else {
+      node.appendChild(document.createTextNode('This profile records no artifact.'));
+      // Profiles authored before artifact identity existed land here. Binding
+      // one is the only alternative to recreating it by hand, so the offer
+      // belongs where the absence is reported.
+      if (_artifactContext) {
+        const bind = document.createElement('button');
+        bind.type = 'button';
+        bind.className = 'cookbook-profile-bind';
+        bind.dataset.bindArtifact = '1';
+        bind.textContent = `Bind to ${_artifactLabel(_artifactContext.artifact)}`;
+        bind.disabled = _busy;
+        node.appendChild(bind);
+      }
+    }
+    node.classList.toggle('is-error', !_boundArtifact && !_pendingBind);
     if (create) create.disabled = _busy || !_artifactContext || !_form;
     return;
   }
@@ -491,6 +511,7 @@ async function _openProfile(profileId, { fetchImpl = globalThis.fetch } = {}) {
     }
     _state = beginEdit(_state, _form, profile, read.etag);
     _boundArtifact = _refLabel(profile.artifact_ref);
+    _pendingBind = null;
     _setStatus(`Editing ${profile.id}.`);
     _renderAll();
   } catch (error) {
@@ -538,7 +559,9 @@ async function _save({ fetchImpl = globalThis.fetch } = {}) {
         fetchImpl,
       })
       : await _request('PUT', `/profiles/${encodeURIComponent(_state.profileId)}`, {
-        body: { values },
+        // A pending binding rides the ordinary save so it is covered by the
+        // same If-Match as every other edit.
+        body: _pendingBind ? { values, artifact_ref: _pendingBind.ref } : { values },
         ifMatch: _state.etag,
         fetchImpl,
       });
@@ -555,6 +578,8 @@ async function _save({ fetchImpl = globalThis.fetch } = {}) {
     }
     const profile = profileFromEnvelope(response.body);
     _state = applySaved(_state, _form, profile, response.etag);
+    _pendingBind = null;
+    _boundArtifact = _refLabel(profile.artifact_ref);
     await _loadProfileList({ fetchImpl });
     _setStatus(`Saved ${_state.profileId}.`);
     _renderAll();
@@ -626,6 +651,7 @@ async function _delete({ fetchImpl = globalThis.fetch } = {}) {
     }
     _state = clearEditor(_state);
     _boundArtifact = null;
+    _pendingBind = null;
     await _loadProfileList({ fetchImpl });
     _setStatus(`Deleted ${profileId}.`);
     _renderAll();
@@ -721,6 +747,7 @@ export function initProfiles({ available = false, provider = null } = {}) {
     _profiles = [];
     _state = createEditorState();
     _boundArtifact = null;
+    _pendingBind = null;
     _loaded = false;
   }
   _available = available === true;
@@ -756,6 +783,23 @@ export function initProfiles({ available = false, provider = null } = {}) {
     }
   });
 
+  const context = _el('cookbook-profile-context');
+  if (context && !context._bindWired) {
+    context._bindWired = true;
+    context.addEventListener('click', event => {
+      if (!event.target?.closest?.('[data-bind-artifact]')) return;
+      if (!_artifactContext) return;
+      const ref = artifactRefFor(_artifactContext.provider, _artifactContext.artifact);
+      if (!ref) {
+        _setStatus('That artifact does not carry the identity the service needs.', 'error');
+        return;
+      }
+      _pendingBind = { ref, label: _artifactLabel(_artifactContext.artifact) };
+      _setStatus('Artifact will be bound when you save.');
+      _renderAll();
+    });
+  }
+
   // The Inventory island announces a selection; this panel only records it as
   // context. Seeding a draft stays an explicit gesture so browsing the
   // inventory can never discard an in-progress draft.
@@ -769,9 +813,41 @@ export function initProfiles({ available = false, provider = null } = {}) {
     });
   }
 
+  // The Inventory island can also ask for a draft outright. Selecting an
+  // artifact and then hunting for it again on another tab is the flow this
+  // replaces, so this one gesture records the context, moves the operator, and
+  // seeds the draft.
+  if (!document._cookbookProfileCreateBound) {
+    document._cookbookProfileCreateBound = true;
+    document.addEventListener('cookbook:create-profile-for', async event => {
+      const detail = event?.detail || {};
+      if (!detail.artifact) return;
+      _artifactContext = { provider: detail.provider || null, artifact: detail.artifact };
+      document.querySelector('.cookbook-tab[data-backend="Profiles"]')?.click();
+      await loadProfiles();
+      await _startDraft();
+    });
+  }
+
   _renderAll();
 }
 
 export function activateProfiles() {
   return loadProfiles();
+}
+
+/** Fetch just enough to tell the Inventory island which artifacts have profiles.
+ *
+ * The coverage chips are the reason to open the Inventory tab at all, so they
+ * cannot wait for the operator to visit Profiles first -- an artifact would
+ * read as unprofiled purely because nobody had asked yet. Coverage is
+ * advisory, so a failure here leaves the chips absent rather than wrong.
+ */
+export async function refreshProfileCoverage({ fetchImpl = globalThis.fetch } = {}) {
+  if (!_available) return;
+  try {
+    await _loadProfileList({ fetchImpl });
+  } catch {
+    /* no chips is the honest state when the service cannot be reached */
+  }
 }

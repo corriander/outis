@@ -22659,16 +22659,54 @@ body.gallery-selecting .gallery-dl-btn,
   color: var(--red);
 }
 
+/* Profiled and unprofiled are the same kind of statement about an artifact, so
+   they are the same chip and only the hue differs. Both sit at full opacity:
+   coverage is what the operator scans this list for. */
+.cookbook-inventory-profiled,
+.cookbook-inventory-unprofiled {
+  opacity: 1;
+}
+
 .cookbook-inventory-profiled {
+  border-color: var(--green);
   color: var(--green);
 }
 
-/* An artifact nothing can launch is the thing worth spotting in a long list,
-   so this chip is the one that does not fade into the row. */
 .cookbook-inventory-unprofiled {
   border-color: var(--warn);
   color: var(--warn);
-  opacity: 1;
+}
+
+.cookbook-inventory-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.cookbook-inventory-create-profile,
+.cookbook-profile-bind {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 9px;
+  background: var(--card);
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.cookbook-profile-bind {
+  margin-left: 8px;
+}
+
+.cookbook-inventory-create-profile:hover,
+.cookbook-profile-bind:hover {
+  border-color: var(--accent, var(--fg));
+}
+
+.cookbook-inventory-create-profile:disabled,
+.cookbook-profile-bind:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
 
 .cookbook-inventory-size {
