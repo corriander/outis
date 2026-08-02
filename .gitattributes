@@ -1,20 +1,24 @@
-# Normalize line endings so a Windows checkout (git core.autocrlf=true) can't
-# corrupt shell-script shebangs. A CRLF `#!/bin/sh\r` makes the kernel look for
+# Every tracked text file is LF in the index and in the worktree, on every
+# platform. `eol=lf` is a repository rule, so it wins over a contributor's
+# `core.autocrlf` and the OS that materialises the checkout cannot change it.
+#
+# This is not a style preference. A CRLF `#!/bin/sh\r` makes the kernel look for
 # an interpreter literally named "/bin/sh\r", producing the Docker startup error
 # "exec /usr/local/bin/entrypoint.sh: no such file or directory" (issues #150, #77).
-* text=auto
+* text=auto eol=lf
 
-# Shell scripts must stay LF on every platform (run by sh/bash, incl. in Docker).
+# Redundant under the rule above, kept deliberately: these are the files where a
+# CRLF regression is a broken container rather than a noisy diff. `scripts/outis`
+# is extensionless, so it is named rather than matched.
 *.sh   text eol=lf
 *.bash text eol=lf
 entrypoint.sh text eol=lf
 docker/entrypoint.sh text eol=lf
 scripts/outis text eol=lf
 
-# Windows-native scripts stay CRLF.
-*.ps1 text eol=crlf
-*.cmd text eol=crlf
-*.bat text eol=crlf
+# Windows-native scripts are LF too. Verified on this estate: cmd.exe parses
+# LF-only batch including `goto` into labels and multi-line `if errorlevel (...)`
+# blocks, and both Windows PowerShell 5.1 and PowerShell 7 parse LF-only .ps1.
 
 # Binary assets — never normalize.
 *.png  binary
