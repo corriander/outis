@@ -315,6 +315,12 @@ Three states are handled as first-class outcomes rather than errors:
   explicit choice: adopt the provider's version, or keep the local draft and
   overwrite at the version just read. Nothing is written until the user picks.
 
+Deleting is offered only for a persisted profile, behind a confirmation, and
+only at a version the user has actually seen — the `If-Match` is what makes it
+mean "delete the thing I was shown" rather than "delete whatever is there now".
+A refused precondition takes the same path as a refused save: nothing is
+removed, and resolving the conflict is what adopts the version just read.
+
 The inventory tab's `cookbook:artifact-selected` event is the hand-off between
 the two islands. Selecting an artifact only *records* it as context; seeding a
 draft from it is a separate, explicit action, so browsing the inventory can
@@ -326,8 +332,7 @@ service's `accepted_authorities` does not list that authority.
 Contract normalization, the form vocabulary, and the editor state machine live
 in `frontend/cookbookProfileEditorModel.ts`; `npm run build:profiles` emits the
 committed no-build-browser module consumed by the handwritten DOM adapter in
-`static/js/cookbookProfiles.js`. Deleting profiles is deliberately not in this
-slice.
+`static/js/cookbookProfiles.js`.
 
 ## Boundary scope
 

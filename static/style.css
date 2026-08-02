@@ -22923,6 +22923,16 @@ body.gallery-selecting .gallery-dl-btn,
   gap: 5px;
 }
 
+.cookbook-profile-actions button[hidden] {
+  display: none;
+}
+
+/* The one destructive control in the tab; it should not look like Save. */
+.cookbook-profile-danger:not(:disabled) {
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+  color: var(--red);
+}
+
 .cookbook-profile-banner:empty {
   display: none;
 }

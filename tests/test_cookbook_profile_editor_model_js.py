@@ -27,7 +27,9 @@ _IMPORTS = ", ".join(
         "authorityAccepted",
         "beginDraft",
         "beginEdit",
+        "canDelete",
         "canSubmit",
+        "clearEditor",
         "coerceFieldValue",
         "createEditorState",
         "defaultValues",
@@ -469,6 +471,54 @@ def test_a_saved_profile_becomes_the_new_baseline():
     assert state["profileId"] == "p1"
     assert state["etag"] == '"header"'
     assert _run("isDirty(s)", setup) is False
+
+
+@pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
+def test_a_draft_cannot_be_deleted_because_nothing_is_persisted():
+    assert _run("canDelete(s)", STATE_SETUP) is False
+
+
+@pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
+def test_deleting_needs_a_version_the_user_has_actually_seen():
+    # Without a precondition "delete" would mean "delete whatever is there
+    # now", which is not what the user was shown.
+    without = SETUP + (
+        "const p = {id:'p1', label:'p1', etag:null, values:{}, artifact_ref:null};"
+        "let s = beginEdit(createEditorState(), FORM, p, null);"
+    )
+    with_etag = SETUP + (
+        "const p = {id:'p1', label:'p1', etag:'\"v1\"', values:{}, artifact_ref:null};"
+        "let s = beginEdit(createEditorState(), FORM, p, null);"
+    )
+
+    assert _run("canDelete(s)", without) is False
+    assert _run("canDelete(s)", with_etag) is True
+
+
+@pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
+def test_an_unresolved_conflict_blocks_the_delete_as_well_as_the_save():
+    setup = SETUP + (
+        "const p = {id:'p1', label:'p1', etag:'\"v1\"', values:{}, artifact_ref:null};"
+        "let s = beginEdit(createEditorState(), FORM, p, null);"
+        "const remote = {id:'p1', label:'p1', etag:'\"v2\"', values:{}, artifact_ref:null};"
+        "s = applyConflict(s, 'changed', remote);"
+    )
+
+    assert _run("canDelete(s)", setup) is False
+    # Adopting the version just read is what unblocks it.
+    assert _run("canDelete(resolveConflictWithLocal(s))", setup) is True
+
+
+@pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
+def test_clearing_the_editor_invalidates_a_preview_still_in_flight():
+    setup = STATE_SETUP + "s = nextPreviewToken(s); const token = s.previewToken; s = clearEditor(s);"
+    body = json.dumps({"errors": [{"pointer": "/values/title", "code": "e", "message": "Gone."}]})
+    state = _run(f"applyPreview(s, token, {body})", setup)
+
+    assert state["mode"] == "idle"
+    assert state["profileId"] is None
+    assert state["etag"] is None
+    assert state["fieldErrors"] == {}
 
 
 # -- wire shapes ----------------------------------------------------------

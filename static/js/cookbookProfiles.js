@@ -17,7 +17,9 @@ import {
   authorityAccepted,
   beginDraft,
   beginEdit,
+  canDelete,
   canSubmit,
+  clearEditor,
   createEditorState,
   fieldAllowed,
   fieldConstraints,
@@ -63,6 +65,9 @@ let _artifactContext = null;
 let _loaded = false;
 let _busy = false;
 let _previewTimer = null;
+// Which write was refused, so the conflict offers the right choice: a delete
+// has no local edits to weigh against the provider's version.
+let _conflictOperation = 'Save';
 // Field specs in render order, so a control can be resolved from its index
 // without interpolating a provider-supplied id into a DOM id.
 let _fieldsByIndex = [];
@@ -227,12 +232,17 @@ function _renderBanner() {
   if (!host) return;
   const parts = [];
   if (_state.conflict) {
+    // A delete conflict has no local edits to weigh, so the choice is only
+    // about which version the retry acts on.
+    const deleting = _conflictOperation === 'Delete';
+    const remoteLabel = deleting ? 'Load their version' : 'Discard my edits, load theirs';
+    const localLabel = deleting ? 'Keep mine and retry' : 'Keep my edits and overwrite';
     parts.push(`
       <div class="cookbook-profile-conflict">
         <p>${esc(_state.conflict.message)}</p>
         <div class="cookbook-profile-conflict-actions">
-          <button type="button" class="hwfit-gpu-btn" id="cookbook-profile-take-remote">Discard my edits, load theirs</button>
-          <button type="button" class="hwfit-gpu-btn" id="cookbook-profile-take-local">Keep my edits and overwrite</button>
+          <button type="button" class="hwfit-gpu-btn" id="cookbook-profile-take-remote">${esc(remoteLabel)}</button>
+          <button type="button" class="hwfit-gpu-btn" id="cookbook-profile-take-local">${esc(localLabel)}</button>
         </div>
       </div>`);
   }
@@ -249,12 +259,19 @@ function _renderBanner() {
 function _renderActions() {
   const save = _el('cookbook-profile-save');
   const revert = _el('cookbook-profile-revert');
+  const remove = _el('cookbook-profile-delete');
   const dirty = isDirty(_state);
   if (save) {
     save.disabled = _busy || !canSubmit(_state);
     save.textContent = _state.mode === 'new' ? 'Create profile' : 'Save changes';
   }
   if (revert) revert.disabled = _busy || !dirty;
+  if (remove) {
+    // Hidden rather than disabled while drafting: there is nothing persisted
+    // for it to act on, so offering it at all would be misleading.
+    remove.hidden = _state.mode !== 'editing';
+    remove.disabled = _busy || !canDelete(_state);
+  }
 }
 
 function _setStatus(message, kind = '') {
@@ -503,7 +520,14 @@ async function _save({ fetchImpl = globalThis.fetch } = {}) {
   }
 }
 
-async function _enterConflict({ fetchImpl = globalThis.fetch } = {}) {
+/**
+ * A refused precondition, for either write.
+ *
+ * Resolving the conflict is what adopts the version just read, so the retry --
+ * whether a save or a delete -- then acts on a version the user has seen.
+ */
+async function _enterConflict({ fetchImpl = globalThis.fetch, operation = 'Save' } = {}) {
+  _conflictOperation = operation;
   let remote = null;
   try {
     const read = await _request('GET', `/profiles/${encodeURIComponent(_state.profileId)}`, { fetchImpl });
@@ -514,15 +538,54 @@ async function _enterConflict({ fetchImpl = globalThis.fetch } = {}) {
   } catch {
     // Fall through: the conflict is still reportable without their version.
   }
+  const kept = operation === 'Delete'
+    ? 'Nothing was removed.'
+    : 'Your edits are kept below.';
   _state = applyConflict(
     _state,
     remote
-      ? 'This profile changed since you loaded it. Your edits are kept below.'
-      : 'This profile changed since you loaded it, and the current version could not be read. Your edits are kept below.',
+      ? `This profile changed since you loaded it. ${kept}`
+      : `This profile changed since you loaded it, and the current version could not be read. ${kept}`,
     remote,
   );
-  _setStatus('Save refused: the profile changed since you loaded it.', 'error');
+  _setStatus(`${operation} refused: the profile changed since you loaded it.`, 'error');
   _renderFeedback();
+}
+
+async function _delete({ fetchImpl = globalThis.fetch } = {}) {
+  if (!canDelete(_state) || _busy) return;
+  const profileId = _state.profileId;
+  const message = `Delete the profile "${profileId}"? The service removes it; this cannot be undone from here.`;
+  const styled = window.styledConfirm;
+  const confirmed = styled
+    ? await styled(message, { confirmText: 'Delete', cancelText: 'Cancel' })
+    : (window.confirm ? window.confirm(message) : false);
+  if (!confirmed) return;
+  _busy = true;
+  _renderActions();
+  try {
+    const response = await _request('DELETE', `/profiles/${encodeURIComponent(profileId)}`, {
+      ifMatch: _state.etag,
+      fetchImpl,
+    });
+    if (response.status === 412) {
+      await _enterConflict({ fetchImpl, operation: 'Delete' });
+      return;
+    }
+    if (response.status !== 204) {
+      _setStatus(_envelopeMessage(response.body) || `Delete failed (HTTP ${response.status})`, 'error');
+      return;
+    }
+    _state = clearEditor(_state);
+    await _loadProfileList({ fetchImpl });
+    _setStatus(`Deleted ${profileId}.`);
+    _renderAll();
+  } catch (error) {
+    _setStatus(_transportMessage(error), 'error');
+  } finally {
+    _busy = false;
+    _renderActions();
+  }
 }
 
 function _revert() {
@@ -589,6 +652,7 @@ export function profilesPanelHtml({ available = false, provider = null } = {}) {
             <div class="cookbook-profile-editor-heading">
               <h3 id="cookbook-profile-editing"></h3>
               <div class="cookbook-profile-actions">
+                <button type="button" class="hwfit-gpu-btn cookbook-profile-danger" id="cookbook-profile-delete" hidden disabled>Delete</button>
                 <button type="button" class="hwfit-gpu-btn" id="cookbook-profile-revert" disabled>Revert</button>
                 <button type="button" class="hwfit-gpu-btn" id="cookbook-profile-save" disabled>Save changes</button>
               </div>
@@ -616,6 +680,7 @@ export function initProfiles({ available = false, provider = null } = {}) {
   _el('cookbook-profile-new')?.addEventListener('click', () => { _startDraft(); });
   _el('cookbook-profile-save')?.addEventListener('click', () => { _save(); });
   _el('cookbook-profile-revert')?.addEventListener('click', _revert);
+  _el('cookbook-profile-delete')?.addEventListener('click', () => { _delete(); });
 
   const list = _el('cookbook-profile-list');
   list?.addEventListener('click', event => {

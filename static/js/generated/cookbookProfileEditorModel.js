@@ -610,6 +610,12 @@ export function applySaved(state, document, profile, etag) {
         conflict: null,
     };
 }
+/** Return to the empty editor, e.g. after the open profile was deleted. */
+export function clearEditor(state) {
+    // Advance the token so a preview still in flight for the closed profile
+    // cannot land on whatever is opened next.
+    return { ...createEditorState(), previewToken: state.previewToken + 1 };
+}
 export function isDirty(state) {
     return !valuesEqual(state.values, state.baseline);
 }
@@ -621,6 +627,22 @@ export function canSubmit(state) {
         return false;
     // A replace requires a precondition; without one the provider answers 428.
     if (state.mode === "editing" && !state.etag)
+        return false;
+    return true;
+}
+/**
+ * Whether a delete may be attempted.
+ *
+ * Only a persisted profile can be deleted, and only at a version the user has
+ * actually seen: the precondition is what makes "delete" mean "delete the
+ * thing I was shown" rather than "delete whatever is there now".
+ */
+export function canDelete(state) {
+    if (state.mode !== "editing" || !state.profileId)
+        return false;
+    if (state.conflict)
+        return false;
+    if (!state.etag)
         return false;
     return true;
 }
