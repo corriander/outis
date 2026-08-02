@@ -40,7 +40,11 @@ profiles, and runtime lifecycle are owned by external providers. With no
 providers configured, external mode is a deliberately reduced catalogue-only
 surface (browse and broad search; operational routes 501). Configuring an
 ArtifactStore adds read-only inventory without enabling acquisition, profile,
-or runtime operations. External mode becomes the intended default only when
+or runtime operations. Configuring a ProfileService adds provider-owned profile
+authoring through a same-origin proxy without enabling acquisition or runtime
+operations. Inventory and profile providers are selected independently; neither
+implies the other, and an external ProfileService never re-enables the inherited
+local profile routes. External mode becomes the intended default only when
 provider-backed capabilities reach parity with the inherited browser. Future
 providers should implement one or more capability groups without making
 unrelated groups appear available.
@@ -181,6 +185,86 @@ The command-line provider deliberately has no default authority:
 silently publish the same ArtifactRef namespace. Direct Python callers of
 `inventory_document()` retain the historical `directory` default for source
 compatibility only; network providers must not rely on it.
+
+## External runtime profiles
+
+Set `OUTIS_PROFILE_SERVICE_URL` to let the Cookbook author runtime profiles
+against an external ProfileService that implements the version 1 profile
+contract. The service owns the profile schema, validation, path resolution, and
+persistence; Outis owns only the editor. Configuration mirrors the inventory
+client, including the environment variables below:
+
+- `OUTIS_PROFILE_SERVICE_URL` — absolute HTTP(S) base URL of the service. It is
+  validated and normalised; credentials, query, and fragment are rejected.
+- `OUTIS_PROFILE_SERVICE_TOKEN` — server-side bearer token. It is attached to
+  every upstream request and is **never** placed in a browser response body,
+  header, cookie, or local storage.
+- `OUTIS_PROFILE_SERVICE_NAME` — optional display name shown next to the
+  provider; defaults to `external-profile-service`.
+- `OUTIS_PROFILE_SERVICE_TIMEOUT` — per-request timeout in seconds, clamped to
+  `[0.5, 60]` (default 10).
+
+These variables are one of two alternative sources. A deployment manager can
+instead supply the same values once through the managed one-shot bootstrap,
+which persists them encrypted; see
+[Managed one-shot bootstrap](setup.md#managed-one-shot-bootstrap). A persisted
+configuration is authoritative **as a whole** — Outis never combines its fields
+with environment values, so a stale `OUTIS_PROFILE_SERVICE_URL` left in the
+environment cannot partially override a bootstrapped service. The variables
+above apply whenever no persisted ProfileService state exists.
+
+The ProfileService and ArtifactStore roles are selected independently. Pointing
+both at the same endpoint is a legitimate deployment choice, but configuring
+one never configures the other.
+
+Both directions through the proxy are size-capped at 5 MiB, enforced
+incrementally while the body streams so an oversize or length-lying message is
+abandoned rather than buffered first. An oversize browser request is refused
+with `413 request_too_large`; an oversize upstream response becomes
+`502 profile_service_invalid`.
+
+Outis reaches the service server-side only, with redirects disabled and ambient
+proxy environment ignored. A same-origin proxy under
+`/api/cookbook/profile-service` exposes the contract to the browser behind the
+existing admin/session authority:
+
+```text
+GET    /api/cookbook/profile-service                 # discovery document (+ provider_name)
+GET    /api/cookbook/profile-service/form            # fields[] form vocabulary
+POST   /api/cookbook/profile-service/draft           # seed a stateless draft from an ArtifactRef
+POST   /api/cookbook/profile-service/preview         # validate values without persisting
+GET    /api/cookbook/profile-service/profiles        # list
+POST   /api/cookbook/profile-service/profiles        # create
+GET    /api/cookbook/profile-service/profiles/{id}   # read (surfaces ETag)
+PUT    /api/cookbook/profile-service/profiles/{id}   # replace (requires If-Match)
+PATCH  /api/cookbook/profile-service/profiles/{id}   # partial update with explicit clear (requires If-Match)
+DELETE /api/cookbook/profile-service/profiles/{id}   # delete (requires If-Match)
+```
+
+The proxy preserves the provider's structured `{errors, warnings}` envelope and
+its status codes so the editor can render field- and profile-level feedback. The
+one translation is authentication: an upstream 401 means the server-side token
+is wrong, so the proxy returns a 502 `profile_service_unauthorized` rather than a
+browser 401. An unreachable service is 502 `profile_service_unreachable`; a
+response that violates the contract is 502 `profile_service_invalid`.
+
+Two boundaries are load-bearing:
+
+- **Concurrency is explicit.** Read and create responses carry an `ETag`; writes
+  require the browser to send the matching `If-Match`. The proxy forwards that
+  header verbatim and never synthesises a wildcard overwrite — a missing
+  precondition is the service's `428` to answer.
+- **Requests carry an ArtifactRef, never a model path.** A draft or create
+  request identifies an artifact by `{authority, artifact_id, observation}`
+  only; any concrete path a caller attaches is dropped before the request
+  leaves Outis. The service resolves the launch path itself. Exact inventory
+  path variants remain display/copy metadata and are never submitted.
+
+The set of artifact authorities a service accepts is advertised by its discovery
+document (`accepted_authorities`), which the browser reads through the proxy. The
+synchronous capability document does not enumerate them: it reports only that an
+external ProfileService is configured (`profile_service.external`) and its
+display provider, because honest enumeration requires a live call.
 
 ## Boundary scope
 

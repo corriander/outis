@@ -1,11 +1,16 @@
-"""Persistent and environment-backed ArtifactStore configuration.
+"""Persistent and environment-backed ProfileService configuration.
 
-Standalone deployments may continue to configure the provider through the
-environment. A bootstrapped persistent configuration is authoritative as a
-whole: callers never combine its fields with environment values. The active
-file records whether the provider has ever been reached successfully; an
-unverified configuration remains usable so optional provider downtime cannot
-block Outis configuration or startup.
+Mirrors ``artifact_store/config.py``. Standalone deployments may continue to
+configure the provider through the environment. A bootstrapped persistent
+configuration is authoritative as a whole: callers never combine its fields
+with environment values. The active file records whether the provider has ever
+been reached successfully; an unverified configuration remains usable so
+optional provider downtime cannot block Outis configuration or startup.
+
+ArtifactStore and ProfileService are independent roles. A deployment may
+deliberately point both at the same endpoint with the same bearer, but neither
+role is ever inferred from the other and their configuration sources are never
+merged.
 """
 
 from __future__ import annotations
@@ -19,23 +24,23 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from core.atomic_io import atomic_write_json
-from src.constants import ARTIFACT_STORE_CANDIDATE_FILE, ARTIFACT_STORE_CONFIG_FILE
+from src.constants import PROFILE_SERVICE_CANDIDATE_FILE, PROFILE_SERVICE_CONFIG_FILE
 from src.managed_transaction import ManagedTransactionError, load_transaction
 from src.secret_storage import decrypt, encrypt
 
 
 CONFIG_SCHEMA_VERSION = 1
-DEFAULT_PROVIDER_NAME = "external-artifact-store"
+DEFAULT_PROVIDER_NAME = "external-profile-service"
 DEFAULT_TIMEOUT_SECONDS = 10.0
-_TOKEN_PAYLOAD_PREFIX = "artifact-store-token:"
+_TOKEN_PAYLOAD_PREFIX = "profile-service-token:"
 
 
-class ArtifactStoreConfigurationError(RuntimeError):
-    """Stored or supplied ArtifactStore configuration is invalid."""
+class ProfileServiceConfigurationError(RuntimeError):
+    """Stored or supplied ProfileService configuration is invalid."""
 
 
 @dataclass(frozen=True)
-class ArtifactStoreConfiguration:
+class ProfileServiceConfiguration:
     base_url: str
     token: str | None
     name: str = DEFAULT_PROVIDER_NAME
@@ -52,14 +57,14 @@ def validated_base_url(value: str) -> str:
     try:
         parsed = urlsplit(raw)
     except ValueError as exc:
-        raise ArtifactStoreConfigurationError("ArtifactStore URL is invalid") from exc
+        raise ProfileServiceConfigurationError("ProfileService URL is invalid") from exc
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ArtifactStoreConfigurationError(
-            "ArtifactStore URL must be an absolute HTTP(S) URL"
+        raise ProfileServiceConfigurationError(
+            "ProfileService URL must be an absolute HTTP(S) URL"
         )
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
-        raise ArtifactStoreConfigurationError(
-            "ArtifactStore URL must not contain credentials, query, or fragment"
+        raise ProfileServiceConfigurationError(
+            "ProfileService URL must not contain credentials, query, or fragment"
         )
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
 
@@ -72,17 +77,17 @@ def normalized_timeout(value: object) -> float:
     return max(0.5, min(timeout, 60.0))
 
 
-def environment_configuration() -> ArtifactStoreConfiguration | None:
-    base_url = os.getenv("OUTIS_ARTIFACT_STORE_URL", "").strip()
+def environment_configuration() -> ProfileServiceConfiguration | None:
+    base_url = os.getenv("OUTIS_PROFILE_SERVICE_URL", "").strip()
     if not base_url:
         return None
-    return ArtifactStoreConfiguration(
+    return ProfileServiceConfiguration(
         base_url=validated_base_url(base_url),
-        token=os.getenv("OUTIS_ARTIFACT_STORE_TOKEN", "").strip() or None,
-        name=os.getenv("OUTIS_ARTIFACT_STORE_NAME", DEFAULT_PROVIDER_NAME).strip()
+        token=os.getenv("OUTIS_PROFILE_SERVICE_TOKEN", "").strip() or None,
+        name=os.getenv("OUTIS_PROFILE_SERVICE_NAME", DEFAULT_PROVIDER_NAME).strip()
         or DEFAULT_PROVIDER_NAME,
         timeout_seconds=normalized_timeout(
-            os.getenv("OUTIS_ARTIFACT_STORE_TIMEOUT", str(DEFAULT_TIMEOUT_SECONDS))
+            os.getenv("OUTIS_PROFILE_SERVICE_TIMEOUT", str(DEFAULT_TIMEOUT_SECONDS))
         ),
     )
 
@@ -92,12 +97,12 @@ def _read_document(path: str) -> dict:
         with open(path, "r", encoding="utf-8") as handle:
             document = json.load(handle)
     except (OSError, ValueError) as exc:
-        raise ArtifactStoreConfigurationError(
-            "ArtifactStore configuration could not be read"
+        raise ProfileServiceConfigurationError(
+            "ProfileService configuration could not be read"
         ) from exc
     if not isinstance(document, dict) or document.get("schema_version") != CONFIG_SCHEMA_VERSION:
-        raise ArtifactStoreConfigurationError(
-            "ArtifactStore configuration has an unsupported schema"
+        raise ProfileServiceConfigurationError(
+            "ProfileService configuration has an unsupported schema"
         )
     return document
 
@@ -105,7 +110,8 @@ def _read_document(path: str) -> dict:
 def _encrypt_token(token: str) -> str:
     # ``secret_storage.encrypt`` treats values beginning with ``enc:`` as
     # already encrypted. Prefixing the plaintext payload keeps arbitrary bearer
-    # values (including a real token beginning ``enc:``) unambiguous.
+    # values (including a real token beginning ``enc:``) unambiguous. The prefix
+    # is role-specific, so an ArtifactStore payload cannot be read back here.
     return encrypt(f"{_TOKEN_PAYLOAD_PREFIX}{token}")
 
 
@@ -116,20 +122,19 @@ def _decrypt_token(value: object) -> str | None:
     return payload[len(_TOKEN_PAYLOAD_PREFIX) :] or None
 
 
-def _configuration_from_document(document: dict, *, source: str) -> ArtifactStoreConfiguration:
+def _configuration_from_document(document: dict, *, source: str) -> ProfileServiceConfiguration:
     entry = document.get("configuration")
     if not isinstance(entry, dict):
-        raise ArtifactStoreConfigurationError("ArtifactStore configuration is missing")
+        raise ProfileServiceConfigurationError("ProfileService configuration is missing")
     token = _decrypt_token(entry.get("token"))
     # The revision and the managed administrator describe the bootstrap run,
-    # not this role, so they come from the transaction record. Deployments
-    # written before the split still carry them inline; the transaction loader
-    # adopts those, so nothing is read from this document.
+    # not this role, so they come from the transaction record shared with
+    # ArtifactStore.
     try:
         transaction = load_transaction()
     except ManagedTransactionError as exc:
-        raise ArtifactStoreConfigurationError(str(exc)) from exc
-    return ArtifactStoreConfiguration(
+        raise ProfileServiceConfigurationError(str(exc)) from exc
+    return ProfileServiceConfiguration(
         base_url=validated_base_url(str(entry.get("base_url") or "")),
         token=token,
         name=str(entry.get("name") or DEFAULT_PROVIDER_NAME).strip()
@@ -145,38 +150,38 @@ def _configuration_from_document(document: dict, *, source: str) -> ArtifactStor
     )
 
 
-def load_persisted_configuration() -> ArtifactStoreConfiguration | None:
-    if not os.path.exists(ARTIFACT_STORE_CONFIG_FILE):
+def load_persisted_configuration() -> ProfileServiceConfiguration | None:
+    if not os.path.exists(PROFILE_SERVICE_CONFIG_FILE):
         return None
     configuration = _configuration_from_document(
-        _read_document(ARTIFACT_STORE_CONFIG_FILE), source="persisted"
+        _read_document(PROFILE_SERVICE_CONFIG_FILE), source="persisted"
     )
     if not configuration.revision:
-        raise ArtifactStoreConfigurationError(
-            "Persisted ArtifactStore configuration is missing its revision"
+        raise ProfileServiceConfigurationError(
+            "Persisted ProfileService configuration is missing its revision"
         )
     if not configuration.token:
-        raise ArtifactStoreConfigurationError(
-            "Persisted ArtifactStore credential could not be read"
+        raise ProfileServiceConfigurationError(
+            "Persisted ProfileService credential could not be read"
         )
     return configuration
 
 
 def persisted_configuration_present() -> bool:
-    return os.path.exists(ARTIFACT_STORE_CONFIG_FILE)
+    return os.path.exists(PROFILE_SERVICE_CONFIG_FILE)
 
 
-def resolve_artifact_store_configuration() -> ArtifactStoreConfiguration | None:
+def resolve_profile_service_configuration() -> ProfileServiceConfiguration | None:
     """Resolve one complete source, with managed persistence taking priority."""
-    if os.path.exists(ARTIFACT_STORE_CONFIG_FILE):
+    if os.path.exists(PROFILE_SERVICE_CONFIG_FILE):
         return load_persisted_configuration()
     return environment_configuration()
 
 
-def write_candidate(configuration: ArtifactStoreConfiguration) -> None:
+def write_candidate(configuration: ProfileServiceConfiguration) -> None:
     if not configuration.token:
-        raise ArtifactStoreConfigurationError(
-            "ArtifactStore bearer credential is required for managed bootstrap"
+        raise ProfileServiceConfigurationError(
+            "ProfileService bearer credential is required for managed bootstrap"
         )
     document = {
         "schema_version": CONFIG_SCHEMA_VERSION,
@@ -187,30 +192,30 @@ def write_candidate(configuration: ArtifactStoreConfiguration) -> None:
             "token": _encrypt_token(configuration.token),
         },
     }
-    atomic_write_json(ARTIFACT_STORE_CANDIDATE_FILE, document, indent=2)
+    atomic_write_json(PROFILE_SERVICE_CANDIDATE_FILE, document, indent=2)
 
 
-def load_candidate() -> ArtifactStoreConfiguration:
+def load_candidate() -> ProfileServiceConfiguration:
     configuration = _configuration_from_document(
-        _read_document(ARTIFACT_STORE_CANDIDATE_FILE), source="candidate"
+        _read_document(PROFILE_SERVICE_CANDIDATE_FILE), source="candidate"
     )
     if not configuration.token:
-        raise ArtifactStoreConfigurationError(
-            "ArtifactStore bearer credential is required for managed bootstrap"
+        raise ProfileServiceConfigurationError(
+            "ProfileService bearer credential is required for managed bootstrap"
         )
     return configuration
 
 
 def discard_candidate() -> None:
     try:
-        Path(ARTIFACT_STORE_CANDIDATE_FILE).unlink()
+        Path(PROFILE_SERVICE_CANDIDATE_FILE).unlink()
     except FileNotFoundError:
         pass
 
 
 def same_provider_configuration(
-    left: ArtifactStoreConfiguration | None,
-    right: ArtifactStoreConfiguration,
+    left: ProfileServiceConfiguration | None,
+    right: ProfileServiceConfiguration,
 ) -> bool:
     if left is None:
         return False
@@ -223,13 +228,13 @@ def same_provider_configuration(
 
 
 def activate_candidate(
-    configuration: ArtifactStoreConfiguration,
+    configuration: ProfileServiceConfiguration,
     *,
     revision: str,
     managed_admin_username: str,
     verified: bool,
     verified_at: str | None = None,
-) -> ArtifactStoreConfiguration:
+) -> ProfileServiceConfiguration:
     if verified and not verified_at:
         verified_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     if not verified:
@@ -248,7 +253,7 @@ def activate_candidate(
             "token": _encrypt_token(configuration.token or ""),
         },
     }
-    atomic_write_json(ARTIFACT_STORE_CONFIG_FILE, document, indent=2)
+    atomic_write_json(PROFILE_SERVICE_CONFIG_FILE, document, indent=2)
     discard_candidate()
     return replace(
         configuration,
