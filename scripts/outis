@@ -43,7 +43,8 @@ Commands:
               Outis container
                 --build   Build the image from this checkout instead of
                           pulling the published one
-  restart     Restart the existing Outis container without rebuilding
+  restart     Restart the existing Outis container without rebuilding.
+              Starts the project's dependencies first if they are down
   status      Show the status of every container in the project
   logs        Follow recent Outis logs
   inventory   Exercise the configured ArtifactStore through the Outis client
@@ -107,7 +108,23 @@ case "${command}" in
     ;;
   restart)
     require_command docker
-    exec docker compose -p "${COMPOSE_PROJECT}" restart odysseus
+    # `stop` stops the whole project, so `restart` is now reachable with the
+    # dependencies down. Restarting the application alone would leave it running
+    # against a stopped search and vector store: up, reporting healthy, and
+    # quietly missing capabilities.
+    #
+    # `up --no-recreate` starts whatever is down and leaves a running container
+    # untouched, so this still neither builds nor recreates. Dependencies and
+    # their healthcheck gate come from the compose file rather than a hardcoded
+    # service list here.
+    was_running="$(docker compose -p "${COMPOSE_PROJECT}" ps -q --status=running odysseus)"
+    docker compose -p "${COMPOSE_PROJECT}" up -d --no-recreate odysseus
+    # Only bounce the application if it was already up. When `up` had to start
+    # it, it is already freshly started and restarting it again would just cost
+    # another startup.
+    if [ -n "${was_running}" ]; then
+      exec docker compose -p "${COMPOSE_PROJECT}" restart odysseus
+    fi
     ;;
   status)
     require_command docker

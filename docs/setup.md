@@ -76,6 +76,11 @@ their state survives, and `deploy` or `restart` brings the project back. There
 is deliberately no `down` verb — removing containers is a different promise than
 the rest of this surface makes.
 
+Because `stop` takes the whole project down, `restart` starts any stopped
+dependencies before bouncing the application, waiting on the search
+healthcheck the same way `deploy` does. It still never builds or recreates
+anything; use `deploy` for that.
+
 > **Jurisdiction:** `scripts/outis` is the deployment surface for *standalone*
 > Outis deployments — a checkout that owns its own containers, volumes, and
 > lifecycle. If an external control plane or orchestrator manages this
