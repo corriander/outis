@@ -105,10 +105,10 @@ validate the redacted configuration without starting containers.
 #### Managed one-shot bootstrap
 
 An external deployment manager can hand Outis its initial administrator and
-ArtifactStore credentials once, then start and restart it without resolving
-those secrets again. This is a local data-plane operation, not a provisioning
-API. Stop the main application container before applying it so no running
-process holds stale authentication state:
+provider credentials once, then start and restart it without resolving those
+secrets again. This is a local data-plane operation, not a provisioning API.
+Stop the main application container before applying it so no running process
+holds stale authentication state:
 
 ```bash
 docker compose stop odysseus
@@ -126,9 +126,9 @@ docker compose run --rm --no-deps \
   -e OUTIS_ARTIFACT_STORE_URL \
   -e OUTIS_ARTIFACT_STORE_TOKEN \
   odysseus python -m src.managed_bootstrap apply
-```
 
 unset ODYSSEUS_ADMIN_PASSWORD OUTIS_ARTIFACT_STORE_TOKEN
+```
 
 The command validates the supplied configuration, persists the provider
 credential encrypted in the normal Outis data directory, and reads it back
@@ -153,6 +153,46 @@ Once bootstrapped, the persisted provider configuration is authoritative as a
 whole for capability reporting and inventory requests. The environment-only
 configuration above remains supported when no persisted bootstrap exists.
 `OUTIS_COOKBOOK_MODE` remains an independent deployment choice.
+
+##### Bootstrapping a ProfileService at the same time
+
+ArtifactStore and ProfileService are independent roles. Adding
+`OUTIS_PROFILE_SERVICE_URL` and `OUTIS_PROFILE_SERVICE_TOKEN` to the same
+`apply` converges both in one transaction under one shared revision:
+
+```bash
+docker compose run --rm --no-deps \
+  -e ODYSSEUS_ADMIN_USER \
+  -e ODYSSEUS_ADMIN_PASSWORD \
+  -e OUTIS_ARTIFACT_STORE_URL \
+  -e OUTIS_ARTIFACT_STORE_TOKEN \
+  -e OUTIS_PROFILE_SERVICE_URL \
+  -e OUTIS_PROFILE_SERVICE_TOKEN \
+  odysseus python -m src.managed_bootstrap apply
+```
+
+ProfileService is optional and verified independently, by a best-effort
+request to `/v1/service`. As with the inventory provider, an unreachable
+service is saved with `verified: false` and a warning rather than refused.
+
+A deployment may deliberately give both roles the same endpoint and bearer,
+but neither role is ever inferred from the other: configuring an ArtifactStore
+does not configure a ProfileService.
+
+**Omitting a role leaves it alone.** An `apply` that supplies no
+ProfileService inputs does not address that role at all — existing
+ProfileService state is untouched and the shared revision does not change. An
+ArtifactStore-only deployment manager therefore needs no changes, and one that
+has configured both can re-run either alone. There is currently no way to
+retire a configured role through `apply`; remove its state file to do that.
+ArtifactStore is still required on every run.
+
+The revision and managed administrator live in `data/managed_bootstrap.json`,
+with each role's provider configuration in `data/artifact_store.json` and
+`data/profile_service.json`. Deployments bootstrapped before ProfileService
+existed kept those two fields inside `data/artifact_store.json`; they are read
+as they are, and the next `apply` writes the current layout without changing
+the revision.
 
 To include optional extras in the image (PDF viewer and Office extraction,
 including AGPL PyMuPDF), set `INSTALL_OPTIONAL=true` in `.env.local` and run the

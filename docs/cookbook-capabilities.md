@@ -192,7 +192,7 @@ Set `OUTIS_PROFILE_SERVICE_URL` to let the Cookbook author runtime profiles
 against an external ProfileService that implements the version 1 profile
 contract. The service owns the profile schema, validation, path resolution, and
 persistence; Outis owns only the editor. Configuration mirrors the inventory
-client:
+client, including the environment variables below:
 
 - `OUTIS_PROFILE_SERVICE_URL` — absolute HTTP(S) base URL of the service. It is
   validated and normalised; credentials, query, and fragment are rejected.
@@ -203,6 +203,19 @@ client:
   provider; defaults to `external-profile-service`.
 - `OUTIS_PROFILE_SERVICE_TIMEOUT` — per-request timeout in seconds, clamped to
   `[0.5, 60]` (default 10).
+
+These variables are one of two alternative sources. A deployment manager can
+instead supply the same values once through the managed one-shot bootstrap,
+which persists them encrypted; see
+[Managed one-shot bootstrap](setup.md#managed-one-shot-bootstrap). A persisted
+configuration is authoritative **as a whole** — Outis never combines its fields
+with environment values, so a stale `OUTIS_PROFILE_SERVICE_URL` left in the
+environment cannot partially override a bootstrapped service. The variables
+above apply whenever no persisted ProfileService state exists.
+
+The ProfileService and ArtifactStore roles are selected independently. Pointing
+both at the same endpoint is a legitimate deployment choice, but configuring
+one never configures the other.
 
 Outis reaches the service server-side only, with redirects disabled and ambient
 proxy environment ignored. A same-origin proxy under
