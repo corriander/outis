@@ -69,6 +69,27 @@ jobs:
 
           publish_report
 
+  line-endings:
+    name: Line endings (LF only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+      # Assert on the INDEX (i/...), not the worktree. Worktree endings depend on
+      # the checkout platform and the runner's core.autocrlf; what must never
+      # regress is the committed content. Files Git classifies as binary are
+      # excluded — `binary` implies `-text`, and their bytes are not our business.
+      - name: No CRLF in tracked text
+        run: |
+          offenders=$(git ls-files --eol | grep -E '^i/(crlf|mixed)' | grep -v 'attr/.*-text' || true)
+          if [ -n "$offenders" ]; then
+            echo "::error::Tracked text must be LF in the index. See .gitattributes (OUTIS-OPS-002)."
+            echo "$offenders"
+            exit 1
+          fi
+          echo "All tracked text files are LF in the index."
+
   python-syntax:
     name: Python syntax (compileall)
     runs-on: ubuntu-latest
