@@ -69,6 +69,12 @@ let _boundArtifact = null;
 // An artifact chosen for an unbound profile, applied by the next save so the
 // binding travels through the same ETag-guarded write as every other edit.
 let _pendingBind = null;
+// The open profile's launch path and the service's derived match for it. The
+// path is the one fact that identifies which artifact a profile is about, and
+// the match is the service's answer to that question -- neither is guessable
+// from the inventory's current selection.
+let _openModelPath = null;
+let _openMatch = null;
 let _loaded = false;
 let _busy = false;
 let _previewTimer = null;
@@ -298,6 +304,18 @@ function _refLabel(ref) {
   return ref.artifact_id;
 }
 
+function _addLaunchPath(node) {
+  if (!_openModelPath) return;
+  // The path is the profile's identity. A name like "gemma" cannot separate
+  // two GGUFs of gemma, and every judgement about binding rests on knowing
+  // which file is meant, so it is shown rather than kept on the wire.
+  const path = document.createElement('span');
+  path.className = 'cookbook-profile-path';
+  path.title = _openModelPath;
+  path.textContent = `Launches: ${_openModelPath}`;
+  node.appendChild(path);
+}
+
 function _renderContext() {
   const node = _el('cookbook-profile-context');
   const create = _el('cookbook-profile-new');
@@ -314,10 +332,23 @@ function _renderContext() {
       node.appendChild(document.createTextNode(`Will bind to ${_pendingBind.label} when saved.`));
     } else {
       node.appendChild(document.createTextNode('This profile records no artifact.'));
-      // Profiles authored before artifact identity existed land here. Binding
-      // one is the only alternative to recreating it by hand, so the offer
-      // belongs where the absence is reported.
-      if (_artifactContext) {
+      // Profiles authored before artifact identity existed land here. The
+      // service derives which artifact the recorded path names, so the offer
+      // is one click on a specific file rather than an instruction to go and
+      // recognise it in another tab -- which is how the wrong one gets bound.
+      if (_openMatch) {
+        const bind = document.createElement('button');
+        bind.type = 'button';
+        bind.className = 'cookbook-profile-bind';
+        bind.dataset.bindMatch = '1';
+        bind.textContent = `Bind to ${_openMatch.filename}`;
+        bind.title = `Matched on the path this profile already launches: ${_openModelPath || ''}`;
+        bind.disabled = _busy;
+        node.appendChild(bind);
+      } else if (_artifactContext) {
+        // No match: either the path names nothing this inventory holds, or two
+        // artifacts claim it. The inventory selection is the only remaining
+        // route, and the service refuses it if the paths disagree.
         const bind = document.createElement('button');
         bind.type = 'button';
         bind.className = 'cookbook-profile-bind';
@@ -327,6 +358,7 @@ function _renderContext() {
         node.appendChild(bind);
       }
     }
+    _addLaunchPath(node);
     node.classList.toggle('is-error', !_boundArtifact && !_pendingBind);
     if (create) create.disabled = _busy || !_artifactContext || !_form;
     return;
@@ -355,9 +387,19 @@ function _renderProfileList() {
     host.innerHTML = '<div class="cookbook-profile-empty">No profiles yet.</div>';
     return;
   }
-  host.innerHTML = _profiles.map(profile => `
+  // An unbound profile is one nothing can launch from, and it is invisible
+  // unless the list says so -- the same gap the inventory chips close from the
+  // other side.
+  host.innerHTML = _profiles.map(profile => {
+    const unbound = !profile.artifact_ref;
+    const title = profile.model_path ? ` title="Launches: ${esc(profile.model_path)}"` : '';
+    const mark = unbound
+      ? `<span class="cookbook-profile-unbound">${profile.artifact_match ? 'MATCHED' : 'NO ARTIFACT'}</span>`
+      : '';
+    return `
     <button type="button" class="cookbook-profile-entry${profile.id === _state.profileId ? ' is-active' : ''}"
-            data-profile-id="${esc(profile.id)}">${esc(profile.label)}</button>`).join('');
+            data-profile-id="${esc(profile.id)}"${title}>${esc(profile.label)}${mark}</button>`;
+  }).join('');
 }
 
 function _renderEditorShell() {
@@ -371,9 +413,27 @@ function _renderEditorShell() {
   if (editor) editor.hidden = _state.mode === 'idle';
 }
 
+/** Profiles the service can bind without anyone having to identify anything. */
+function _bindableProfiles() {
+  return _profiles.filter(profile => !profile.artifact_ref && profile.artifact_match && profile.etag);
+}
+
+function _renderBindAll() {
+  const button = _el('cookbook-profile-bind-all');
+  if (!button) return;
+  const pending = _bindableProfiles().length;
+  // An estate that predates artifact identity has dozens of these, and every
+  // one of them is a lookup the service has already done. Offering them one at
+  // a time is the same work forty times over, so the offer is collective.
+  button.hidden = pending === 0;
+  button.disabled = _busy;
+  button.textContent = `Bind ${pending} profile${pending === 1 ? '' : 's'} to matched artifacts`;
+}
+
 function _renderAll() {
   _renderContext();
   _renderProfileList();
+  _renderBindAll();
   _renderEditorShell();
   _renderForm();
 }
@@ -427,6 +487,7 @@ async function _loadProfileList({ fetchImpl = globalThis.fetch } = {}) {
   if (!listed.ok) throw new Error(_envelopeMessage(listed.body) || `Profile list failed (HTTP ${listed.status})`);
   _profiles = profileSummaries(listed.body);
   _renderProfileList();
+  _renderBindAll();
   _announceProfileCoverage();
 }
 
@@ -474,13 +535,15 @@ async function _startDraft({ fetchImpl = globalThis.fetch } = {}) {
     }
     _state = beginDraft(_state, _form, draft.body, ref);
     _boundArtifact = _artifactLabel(_artifactContext.artifact);
+    _openModelPath = null;
+    _openMatch = null;
+    _pendingBind = null;
     _setStatus('Draft seeded from the selected artifact. Nothing is saved yet.');
-    _renderAll();
   } catch (error) {
     _setStatus(_transportMessage(error), 'error');
   } finally {
     _busy = false;
-    _renderActions();
+    _renderAll();
   }
 }
 
@@ -510,16 +573,31 @@ async function _openProfile(profileId, { fetchImpl = globalThis.fetch } = {}) {
       return;
     }
     _state = beginEdit(_state, _form, profile, read.etag);
-    _boundArtifact = _refLabel(profile.artifact_ref);
+    _adoptProfileIdentity(profile);
     _pendingBind = null;
     _setStatus(`Editing ${profile.id}.`);
-    _renderAll();
   } catch (error) {
     _setStatus(_transportMessage(error), 'error');
   } finally {
+    // Render after clearing the flag, not before: controls rendered while busy
+    // are rendered disabled, and _renderActions does not reach the bind button.
     _busy = false;
-    _renderActions();
+    _renderAll();
   }
+}
+
+/** Adopt what the service says this profile is about: its path and its match. */
+function _adoptProfileIdentity(profile) {
+  _boundArtifact = _refLabel(profile.artifact_ref);
+  _openModelPath = profile.model_path || null;
+  _openMatch = profile.artifact_ref ? null : profile.artifact_match;
+}
+
+function _forgetOpenProfile() {
+  _boundArtifact = null;
+  _pendingBind = null;
+  _openModelPath = null;
+  _openMatch = null;
 }
 
 function _schedulePreview() {
@@ -547,21 +625,26 @@ async function _runPreview({ fetchImpl = globalThis.fetch } = {}) {
   }
 }
 
-async function _save({ fetchImpl = globalThis.fetch } = {}) {
+async function _save({ fetchImpl = globalThis.fetch, rebind = false } = {}) {
   if (!canSubmit(_state) || !_form || _busy) return;
   _busy = true;
   _renderActions();
   const values = submissionValues(_form, _state.values, _state.baseline);
   try {
+    const replaceBody = { values };
+    // A pending binding rides the ordinary save so it is covered by the same
+    // If-Match as every other edit.
+    if (_pendingBind) {
+      replaceBody.artifact_ref = _pendingBind.ref;
+      if (rebind) replaceBody.rebind = true;
+    }
     const response = _state.mode === 'new'
       ? await _request('POST', '/profiles', {
         body: { artifact_ref: _state.artifactRef, values },
         fetchImpl,
       })
       : await _request('PUT', `/profiles/${encodeURIComponent(_state.profileId)}`, {
-        // A pending binding rides the ordinary save so it is covered by the
-        // same If-Match as every other edit.
-        body: _pendingBind ? { values, artifact_ref: _pendingBind.ref } : { values },
+        body: replaceBody,
         ifMatch: _state.etag,
         fetchImpl,
       });
@@ -571,6 +654,14 @@ async function _save({ fetchImpl = globalThis.fetch } = {}) {
       return;
     }
     if (!response.ok) {
+      // A refused bind is a question, not a failure: the service is reporting
+      // that this artifact is a different file from the one the profile
+      // launches. Only the operator can say whether that is the intent.
+      if (!rebind && _pendingBind && await _confirmRepoint(response.body)) {
+        _busy = false;
+        await _save({ fetchImpl, rebind: true });
+        return;
+      }
       _state = applyWriteFailure(_state, response.body);
       _setStatus(_envelopeMessage(response.body) || `Save failed (HTTP ${response.status})`, 'error');
       _renderFeedback();
@@ -579,18 +670,83 @@ async function _save({ fetchImpl = globalThis.fetch } = {}) {
     const profile = profileFromEnvelope(response.body);
     _state = applySaved(_state, _form, profile, response.etag);
     _pendingBind = null;
-    _boundArtifact = _refLabel(profile.artifact_ref);
+    _adoptProfileIdentity(profile);
     await _loadProfileList({ fetchImpl });
     _setStatus(`Saved ${_state.profileId}.`);
-    _renderAll();
   } catch (error) {
     // The draft is untouched: a provider outage must not cost the user their
     // edits.
     _setStatus(`${_transportMessage(error)} Your draft is still here.`, 'error');
   } finally {
     _busy = false;
-    _renderActions();
+    _renderAll();
   }
+}
+
+/**
+ * Bind every profile whose recorded path already names exactly one artifact.
+ *
+ * Each write is an ordinary ETag-guarded replace of the profile's own stored
+ * values, so this is the same operation the editor performs, repeated -- not a
+ * privileged bulk path. Nothing here decides which artifact anything is: a
+ * profile without an unambiguous match is left alone, and the service still
+ * refuses any binding that would move a profile onto a different file.
+ */
+async function _bindAllMatched({ fetchImpl = globalThis.fetch } = {}) {
+  const pending = _bindableProfiles();
+  if (!pending.length || _busy) return;
+  _busy = true;
+  _renderBindAll();
+  let bound = 0;
+  const failures = [];
+  try {
+    for (const profile of pending) {
+      try {
+        const response = await _request('PUT', `/profiles/${encodeURIComponent(profile.id)}`, {
+          body: { values: profile.values, artifact_ref: profile.artifact_match.artifact_ref },
+          ifMatch: profile.etag,
+          fetchImpl,
+        });
+        if (response.ok) bound += 1;
+        else failures.push(`${profile.id}: ${_envelopeMessage(response.body) || `HTTP ${response.status}`}`);
+      } catch (error) {
+        failures.push(`${profile.id}: ${_transportMessage(error)}`);
+      }
+    }
+    await _loadProfileList({ fetchImpl });
+    // Partial success is the honest report: the ones that landed are bound,
+    // and re-running only retries what is still unbound.
+    _setStatus(
+      failures.length
+        ? `Bound ${bound}. ${failures.length} refused — ${failures[0]}`
+        : `Bound ${bound} profile${bound === 1 ? '' : 's'}.`,
+      failures.length ? 'error' : '',
+    );
+  } catch (error) {
+    _setStatus(_transportMessage(error), 'error');
+  } finally {
+    _busy = false;
+    _renderAll();
+  }
+}
+
+/** Ask before moving a profile onto a different file from the one it launches. */
+async function _confirmRepoint(body) {
+  const errors = Array.isArray(body?.errors) ? body.errors : [];
+  const mismatch = errors.find(entry => entry?.code === 'artifact_path_mismatch');
+  if (!mismatch) return false;
+  const meta = mismatch.meta || {};
+  const message = [
+    'That artifact is not the file this profile launches.',
+    `Now: ${meta.current_model_path || 'unknown'}`,
+    `Offered: ${meta.offered_model_path || 'unknown'}`,
+    'Binding it changes which model this profile runs.',
+  ].join('\n');
+  const styled = window.styledConfirm;
+  if (styled) {
+    return await styled(message, { confirmText: 'Re-point profile', cancelText: 'Cancel' });
+  }
+  return window.confirm ? window.confirm(message) : false;
 }
 
 /**
@@ -650,8 +806,7 @@ async function _delete({ fetchImpl = globalThis.fetch } = {}) {
       return;
     }
     _state = clearEditor(_state);
-    _boundArtifact = null;
-    _pendingBind = null;
+    _forgetOpenProfile();
     await _loadProfileList({ fetchImpl });
     _setStatus(`Deleted ${profileId}.`);
     _renderAll();
@@ -718,6 +873,7 @@ export function profilesPanelHtml({ available = false, provider = null } = {}) {
         <div class="cookbook-profile-toolbar">
           <span id="cookbook-profile-context" class="cookbook-profile-context">Select an artifact in the Inventory tab to start a profile.</span>
           <button type="button" class="hwfit-gpu-btn" id="cookbook-profile-new" disabled>New profile</button>
+          <button type="button" class="hwfit-gpu-btn cookbook-profile-bind-all" id="cookbook-profile-bind-all" hidden></button>
           <span id="cookbook-profile-provider">${providerText}</span>
         </div>
         <div id="cookbook-profile-status" class="cookbook-profile-status">${available ? 'Open this tab to load the profile service.' : 'Configure an external ProfileService provider to author profiles.'}</div>
@@ -746,8 +902,7 @@ export function initProfiles({ available = false, provider = null } = {}) {
     _service = null;
     _profiles = [];
     _state = createEditorState();
-    _boundArtifact = null;
-    _pendingBind = null;
+    _forgetOpenProfile();
     _loaded = false;
   }
   _available = available === true;
@@ -755,6 +910,7 @@ export function initProfiles({ available = false, provider = null } = {}) {
 
   _el('cookbook-profile-refresh')?.addEventListener('click', () => loadProfiles({ force: true }));
   _el('cookbook-profile-new')?.addEventListener('click', () => { _startDraft(); });
+  _el('cookbook-profile-bind-all')?.addEventListener('click', () => { _bindAllMatched(); });
   _el('cookbook-profile-save')?.addEventListener('click', () => { _save(); });
   _el('cookbook-profile-revert')?.addEventListener('click', _revert);
   _el('cookbook-profile-delete')?.addEventListener('click', () => { _delete(); });
@@ -787,6 +943,13 @@ export function initProfiles({ available = false, provider = null } = {}) {
   if (context && !context._bindWired) {
     context._bindWired = true;
     context.addEventListener('click', event => {
+      if (event.target?.closest?.('[data-bind-match]')) {
+        if (!_openMatch) return;
+        _pendingBind = { ref: _openMatch.artifact_ref, label: _openMatch.filename };
+        _setStatus('Artifact will be bound when you save.');
+        _renderAll();
+        return;
+      }
       if (!event.target?.closest?.('[data-bind-artifact]')) return;
       if (!_artifactContext) return;
       const ref = artifactRefFor(_artifactContext.provider, _artifactContext.artifact);

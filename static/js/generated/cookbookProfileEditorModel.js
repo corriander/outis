@@ -389,6 +389,40 @@ function safeMatches(pattern, value) {
  * carry a validator for each of many items. It is a hint for display only —
  * a write always uses the etag from the read that seeded the draft.
  */
+/**
+ * The service's derived match, or null.
+ *
+ * A partial match is discarded rather than half-rendered: an offer to bind
+ * has to name a specific file, and a suggestion missing its label or its ref
+ * cannot. A profile that already carries a binding never gets one.
+ */
+export function artifactMatchOf(entry) {
+    const match = entry.artifact_match;
+    if (!isRecord(match))
+        return null;
+    if (!isRecord(match.artifact_ref) || typeof match.artifact_ref.artifact_id !== "string") {
+        return null;
+    }
+    if (typeof match.filename !== "string" || !match.filename)
+        return null;
+    return {
+        artifact_ref: match.artifact_ref,
+        filename: match.filename,
+        logical_path: typeof match.logical_path === "string" ? match.logical_path : match.filename,
+        matched_on: typeof match.matched_on === "string" ? match.matched_on : "model_path",
+    };
+}
+function summaryOf(entry) {
+    return {
+        id: entry.id,
+        label: entry.id,
+        etag: typeof entry.etag === "string" ? entry.etag : null,
+        values: isRecord(entry.values) ? entry.values : {},
+        artifact_ref: isRecord(entry.artifact_ref) ? entry.artifact_ref : null,
+        model_path: typeof entry.model_path === "string" ? entry.model_path : null,
+        artifact_match: artifactMatchOf(entry),
+    };
+}
 export function profileSummaries(body) {
     const envelope = isRecord(body) ? body : {};
     const data = isRecord(envelope.data) ? envelope.data : {};
@@ -396,14 +430,7 @@ export function profileSummaries(body) {
     return profiles.flatMap((entry) => {
         if (!isRecord(entry) || typeof entry.id !== "string" || !entry.id)
             return [];
-        const values = isRecord(entry.values) ? entry.values : {};
-        return [{
-                id: entry.id,
-                label: entry.id,
-                etag: typeof entry.etag === "string" ? entry.etag : null,
-                values,
-                artifact_ref: isRecord(entry.artifact_ref) ? entry.artifact_ref : null,
-            }];
+        return [summaryOf(entry)];
     }).sort((left, right) => left.id.localeCompare(right.id, undefined, { numeric: true }));
 }
 export function profileFromEnvelope(body) {
@@ -412,13 +439,7 @@ export function profileFromEnvelope(body) {
     const profile = isRecord(data.profile) ? data.profile : null;
     if (!profile || typeof profile.id !== "string" || !profile.id)
         return null;
-    return {
-        id: profile.id,
-        label: profile.id,
-        etag: typeof profile.etag === "string" ? profile.etag : null,
-        values: isRecord(profile.values) ? profile.values : {},
-        artifact_ref: isRecord(profile.artifact_ref) ? profile.artifact_ref : null,
-    };
+    return summaryOf(profile);
 }
 /** Values a preview accepted, or null when it rejected them. */
 export function previewValues(body) {

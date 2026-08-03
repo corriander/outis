@@ -22866,12 +22866,15 @@ body.gallery-selecting .gallery-dl-btn,
 
 .cookbook-profile-context {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   color: var(--fg);
   font-size: 10px;
   opacity: 0.7;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  /* The launch path sits on its own line beneath the binding, so this row is
+     two lines when a profile is open rather than one truncated one. */
+  white-space: normal;
 }
 
 .cookbook-profile-context.is-error {
@@ -22935,6 +22938,29 @@ body.gallery-selecting .gallery-dl-btn,
 .cookbook-profile-entry.is-active {
   border-color: var(--border);
   background: var(--bg-2, rgba(127, 127, 127, 0.08));
+}
+
+.cookbook-profile-unbound {
+  display: block;
+  margin-top: 2px;
+  color: var(--fg);
+  font-size: 8px;
+  letter-spacing: 0.04em;
+  opacity: 0.55;
+}
+
+.cookbook-profile-path {
+  display: block;
+  overflow: hidden;
+  margin-top: 2px;
+  font-size: 9px;
+  opacity: 0.75;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cookbook-profile-bind-all {
+  white-space: nowrap;
 }
 
 .cookbook-profile-empty {

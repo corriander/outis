@@ -92,8 +92,15 @@ class FakeClient:
     async def read_profile(self, profile_id):
         return await self._answer("read_profile", profile_id=profile_id)
 
-    async def replace_profile(self, profile_id, values, *, if_match):
-        return await self._answer("replace", profile_id=profile_id, values=values, if_match=if_match)
+    async def replace_profile(self, profile_id, values, *, if_match, artifact_ref=None, rebind=False):
+        return await self._answer(
+            "replace",
+            profile_id=profile_id,
+            values=values,
+            if_match=if_match,
+            artifact_ref=artifact_ref,
+            rebind=rebind,
+        )
 
     async def patch_profile(self, profile_id, *, set_values, clear, if_match):
         return await self._answer(
@@ -266,6 +273,48 @@ async def test_write_forwards_browser_if_match(monkeypatch):
     )
     assert client.calls["replace"]["if_match"] == '"abc123"'
     assert client.calls["replace"]["profile_id"] == "example"
+
+
+@pytest.mark.asyncio
+async def test_replace_forwards_an_artifact_binding(monkeypatch):
+    """The binding is the whole reason a legacy profile can be edited at all.
+
+    Dropping it here made the editor's bind button silently do nothing: the
+    request left the browser carrying the ref and reached the provider without
+    it, so the save succeeded and the profile stayed unbound.
+    """
+    client = FakeClient(result=ProfileServiceResponse(200, {"data": {"profile": {}}, "warnings": []}, etag='"new"'))
+    _install(monkeypatch, client)
+    endpoint = _endpoint("/api/cookbook/profile-service/profiles/{profile_id}", "PUT")
+
+    await endpoint(
+        _request("/api/cookbook/profile-service/profiles/example", "PUT",
+                 headers={"If-Match": '"abc123"'},
+                 body={
+                     "values": {"name": "example"},
+                     "artifact_ref": {"authority": "a", "artifact_id": "b"},
+                     "rebind": True,
+                 }),
+        profile_id="example",
+    )
+    assert client.calls["replace"]["artifact_ref"] == {"authority": "a", "artifact_id": "b"}
+    assert client.calls["replace"]["rebind"] is True
+
+
+@pytest.mark.asyncio
+async def test_replace_without_a_binding_forwards_none(monkeypatch):
+    """An ordinary edit must not carry a binding it was never given."""
+    client = FakeClient(result=ProfileServiceResponse(200, {"data": {"profile": {}}, "warnings": []}, etag='"new"'))
+    _install(monkeypatch, client)
+    endpoint = _endpoint("/api/cookbook/profile-service/profiles/{profile_id}", "PUT")
+
+    await endpoint(
+        _request("/api/cookbook/profile-service/profiles/example", "PUT",
+                 headers={"If-Match": '"abc123"'}, body={"values": {"name": "example"}}),
+        profile_id="example",
+    )
+    assert client.calls["replace"]["artifact_ref"] is None
+    assert client.calls["replace"]["rebind"] is False
 
 
 @pytest.mark.asyncio

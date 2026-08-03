@@ -23,6 +23,7 @@ _IMPORTS = ", ".join(
         "applyPreview",
         "applySaved",
         "applyWriteFailure",
+        "artifactMatchOf",
         "artifactRefFor",
         "authorityAccepted",
         "beginDraft",
@@ -541,6 +542,54 @@ def test_list_entries_carry_their_own_validator_in_the_body():
     summaries = _run(f"profileSummaries({body})")
 
     assert [(entry["id"], entry["etag"]) for entry in summaries] == [("a", '"1"'), ("b", '"2"')]
+
+
+@pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
+def test_a_summary_carries_the_path_and_the_match_the_service_derived():
+    """Both are what let the operator say which artifact a profile is about.
+
+    The path identifies the file; the match is the service's answer to which
+    artifact holds it. Without them, binding is a memory test across two tabs.
+    """
+    body = json.dumps(
+        {
+            "data": {
+                "profiles": [
+                    {
+                        "id": "legacy",
+                        "values": {},
+                        "etag": '"1"',
+                        "model_path": r"R:\models\gemma-31b-Q4_K_M.gguf",
+                        "artifact_match": {
+                            "artifact_ref": {"authority": "store-a", "artifact_id": "abc"},
+                            "filename": "gemma-31b-Q4_K_M.gguf",
+                            "logical_path": "gemma/gemma-31b-Q4_K_M.gguf",
+                            "matched_on": "model_path",
+                        },
+                    }
+                ]
+            }
+        }
+    )
+    entry = _run(f"profileSummaries({body})")[0]
+
+    assert entry["model_path"] == r"R:\models\gemma-31b-Q4_K_M.gguf"
+    assert entry["artifact_match"]["filename"] == "gemma-31b-Q4_K_M.gguf"
+    assert entry["artifact_match"]["artifact_ref"]["artifact_id"] == "abc"
+
+
+@pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
+def test_a_profile_with_no_match_reports_none_rather_than_a_partial_offer():
+    """An offer to bind has to name a file; half a match cannot."""
+    unmatched = json.dumps({"id": "p", "values": {}})
+    nameless = json.dumps(
+        {"id": "p", "values": {}, "artifact_match": {"artifact_ref": {"artifact_id": "abc"}}}
+    )
+    reffless = json.dumps({"id": "p", "values": {}, "artifact_match": {"filename": "x.gguf"}})
+
+    assert _run(f"artifactMatchOf({unmatched})") is None
+    assert _run(f"artifactMatchOf({nameless})") is None
+    assert _run(f"artifactMatchOf({reffless})") is None
 
 
 @pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")

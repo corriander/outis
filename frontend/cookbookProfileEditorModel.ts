@@ -65,12 +65,31 @@ export interface ProfileValues {
   [key: string]: unknown;
 }
 
+/**
+ * The artifact a profile's recorded launch path already names.
+ *
+ * Derived by the service, never authored. It is what makes an unbound
+ * profile bindable without the operator recognising the right file out of an
+ * inventory from memory -- a wrong pick silently re-points the profile, so a
+ * suggestion the service can prove is the only safe offer.
+ */
+export interface ArtifactMatch {
+  artifact_ref: Record<string, unknown>;
+  filename: string;
+  logical_path: string;
+  matched_on: string;
+}
+
 export interface ProfileSummary {
   id: string;
   label: string;
   etag: string | null;
   values: ProfileValues;
   artifact_ref: Record<string, unknown> | null;
+  /** The file this profile launches. Null on a profile that records none. */
+  model_path: string | null;
+  /** Present only while the profile carries no binding of its own. */
+  artifact_match: ArtifactMatch | null;
 }
 
 /** One provider-authored message, kept with the pointer it was filed against. */
@@ -507,20 +526,47 @@ function safeMatches(pattern: string, value: string): boolean {
  * carry a validator for each of many items. It is a hint for display only —
  * a write always uses the etag from the read that seeded the draft.
  */
+/**
+ * The service's derived match, or null.
+ *
+ * A partial match is discarded rather than half-rendered: an offer to bind
+ * has to name a specific file, and a suggestion missing its label or its ref
+ * cannot. A profile that already carries a binding never gets one.
+ */
+export function artifactMatchOf(entry: Record<string, unknown>): ArtifactMatch | null {
+  const match = entry.artifact_match;
+  if (!isRecord(match)) return null;
+  if (!isRecord(match.artifact_ref) || typeof match.artifact_ref.artifact_id !== "string") {
+    return null;
+  }
+  if (typeof match.filename !== "string" || !match.filename) return null;
+  return {
+    artifact_ref: match.artifact_ref,
+    filename: match.filename,
+    logical_path: typeof match.logical_path === "string" ? match.logical_path : match.filename,
+    matched_on: typeof match.matched_on === "string" ? match.matched_on : "model_path",
+  };
+}
+
+function summaryOf(entry: Record<string, unknown>): ProfileSummary {
+  return {
+    id: entry.id as string,
+    label: entry.id as string,
+    etag: typeof entry.etag === "string" ? entry.etag : null,
+    values: isRecord(entry.values) ? entry.values : {},
+    artifact_ref: isRecord(entry.artifact_ref) ? entry.artifact_ref : null,
+    model_path: typeof entry.model_path === "string" ? entry.model_path : null,
+    artifact_match: artifactMatchOf(entry),
+  };
+}
+
 export function profileSummaries(body: unknown): ProfileSummary[] {
   const envelope = isRecord(body) ? body : {};
   const data = isRecord(envelope.data) ? envelope.data : {};
   const profiles = Array.isArray(data.profiles) ? data.profiles : [];
   return profiles.flatMap((entry) => {
     if (!isRecord(entry) || typeof entry.id !== "string" || !entry.id) return [];
-    const values = isRecord(entry.values) ? entry.values : {};
-    return [{
-      id: entry.id,
-      label: entry.id,
-      etag: typeof entry.etag === "string" ? entry.etag : null,
-      values,
-      artifact_ref: isRecord(entry.artifact_ref) ? entry.artifact_ref : null,
-    }];
+    return [summaryOf(entry)];
   }).sort((left, right) => left.id.localeCompare(right.id, undefined, { numeric: true }));
 }
 
@@ -529,13 +575,7 @@ export function profileFromEnvelope(body: unknown): ProfileSummary | null {
   const data = isRecord(envelope.data) ? envelope.data : {};
   const profile = isRecord(data.profile) ? data.profile : null;
   if (!profile || typeof profile.id !== "string" || !profile.id) return null;
-  return {
-    id: profile.id,
-    label: profile.id,
-    etag: typeof profile.etag === "string" ? profile.etag : null,
-    values: isRecord(profile.values) ? profile.values : {},
-    artifact_ref: isRecord(profile.artifact_ref) ? profile.artifact_ref : null,
-  };
+  return summaryOf(profile);
 }
 
 /** Values a preview accepted, or null when it rejected them. */
