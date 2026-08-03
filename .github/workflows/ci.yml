@@ -129,9 +129,15 @@ jobs:
             node --check "$f"
           done
 
-  inventory-island:
-    name: Typed inventory island (tsc + generated build)
+  typed-islands:
+    name: Typed frontend island (tsc + generated build)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # Each island keeps its own tsconfig and build script, so a new one is
+      # added here rather than folded into a shared compile.
+      matrix:
+        island: [inventory, profiles]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
@@ -142,14 +148,14 @@ jobs:
       - name: Install frontend toolchain
         run: npm ci
       - name: Typecheck
-        run: npm run check:inventory
+        run: npm run check:${{ matrix.island }}
       # The browser loads the committed build, not the TypeScript. If the two
       # drift, the served behaviour silently stops matching the reviewed source.
       - name: Committed build matches source
         run: |
-          npm run build:inventory
+          npm run build:${{ matrix.island }}
           if ! git diff --exit-code -- static/js/generated/; then
-            echo "::error::static/js/generated/ is stale. Run 'npm run build:inventory' and commit the result."
+            echo "::error::static/js/generated/ is stale. Run 'npm run build:${{ matrix.island }}' and commit the result."
             exit 1
           fi
 

@@ -476,12 +476,27 @@ class ProfileServiceClient:
         return self._validated(response, _ProfileEnvelope, 201)
 
     async def replace_profile(
-        self, profile_id: str, values: Any, *, if_match: str | None
+        self,
+        profile_id: str,
+        values: Any,
+        *,
+        if_match: str | None,
+        artifact_ref: Any | None = None,
+        rebind: bool = False,
     ) -> ProfileServiceResponse:
+        # A profile authored before artifact identity existed acquires its
+        # binding here: there is no other route, and rewriting them by hand is
+        # not a migration path. Omitting the ref leaves any existing binding
+        # untouched, so an ordinary edit cannot re-point a profile.
+        payload: dict[str, Any] = {"values": values}
+        if artifact_ref is not None:
+            payload["artifact_ref"] = normalise_artifact_ref(artifact_ref)
+            if rebind:
+                payload["rebind"] = True
         response = await self._request(
             "PUT",
             f"/v1/profiles/{_encode_id(profile_id)}",
-            json_body={"values": values},
+            json_body=payload,
             if_match=if_match,
         )
         return self._validated(response, _ProfileEnvelope, 200)

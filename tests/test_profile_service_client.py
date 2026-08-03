@@ -264,6 +264,54 @@ async def test_draft_forwards_artifact_ref_and_drops_model_path():
 
 
 @pytest.mark.asyncio
+async def test_replace_forwards_a_binding_and_drops_a_smuggled_path():
+    """Binding a legacy profile travels on the ordinary replace.
+
+    Only identity crosses the wire: a caller that appends a path to the ref is
+    trying to choose the launch path itself, which is the provider's to
+    resolve.
+    """
+    captured = {}
+
+    def handler(request):
+        captured["body"] = json.loads(request.content)
+        return _json({"data": {"profile": {"id": "p1", "values": {}}}, "warnings": []})
+
+    await _client(handler).replace_profile(
+        "p1",
+        {"name": "p1"},
+        if_match='"v1"',
+        artifact_ref={
+            "authority": "inventory-example-a",
+            "artifact_id": "opaque/example.gguf#0123",
+            "model_path": r"R:\hostile.gguf",
+        },
+        rebind=True,
+    )
+
+    assert captured["body"]["artifact_ref"] == {
+        "authority": "inventory-example-a",
+        "artifact_id": "opaque/example.gguf#0123",
+    }
+    assert captured["body"]["rebind"] is True
+
+
+@pytest.mark.asyncio
+async def test_replace_without_a_binding_sends_no_artifact_ref():
+    """Omission is what stops an ordinary edit re-pointing a bound profile."""
+    captured = {}
+
+    def handler(request):
+        captured["body"] = json.loads(request.content)
+        return _json({"data": {"profile": {"id": "p1", "values": {}}}, "warnings": []})
+
+    await _client(handler).replace_profile("p1", {"name": "p1"}, if_match='"v1"')
+
+    assert "artifact_ref" not in captured["body"]
+    assert "rebind" not in captured["body"]
+
+
+@pytest.mark.asyncio
 async def test_draft_preserves_warnings():
     warning = {
         "pointer": "/artifact_ref/observation",

@@ -304,7 +304,13 @@ def setup_profile_service_routes() -> APIRouter:
         if isinstance(body, JSONResponse):
             return body
         return await _run(
-            client.replace_profile(profile_id, body.get("values"), if_match=_if_match(request))
+            client.replace_profile(
+                profile_id,
+                body.get("values"),
+                if_match=_if_match(request),
+                artifact_ref=body.get("artifact_ref"),
+                rebind=bool(body.get("rebind")),
+            )
         )
 
     @router.patch(f"{_PREFIX}/profiles/{{profile_id}}")

@@ -55,6 +55,20 @@ function _dateLabel(value) {
   return date.toLocaleString();
 }
 
+// Null until the Profiles island reports coverage. Rendering a count before
+// then would claim an artifact has no profile when the truth is that nobody
+// has asked the service yet.
+let _profileCounts = null;
+
+function _profileChip(artifactId) {
+  if (!_profileCounts) return '';
+  const count = _profileCounts[artifactId] || 0;
+  // The zero case is the one worth scanning for: an artifact nothing can
+  // launch. It gets a chip of its own rather than the absence of one.
+  if (!count) return '<span class="cookbook-inventory-chip cookbook-inventory-unprofiled">No profile</span>';
+  return `<span class="cookbook-inventory-chip cookbook-inventory-profiled">${count} profile${count === 1 ? '' : 's'}</span>`;
+}
+
 function _artifactHtml(artifact, sortMode) {
   const observed = artifact?.observed || {};
   const labels = artifactDisplayLabels(artifact, sortMode);
@@ -77,6 +91,7 @@ function _artifactHtml(artifact, sortMode) {
           <span class="cookbook-inventory-chip">${esc(quant)}</span>
           ${splitLabel ? `<span class="cookbook-inventory-chip">${esc(splitLabel)}</span>` : ''}
           <span class="cookbook-inventory-chip cookbook-inventory-state-${esc(state)}">${esc(state)}</span>
+          ${_profileChip(artifact.id)}
           <span class="cookbook-inventory-size">${esc(formatArtifactBytes(observed.size_bytes))}</span>
         </div>
       </div>
@@ -92,6 +107,7 @@ function _artifactHtml(artifact, sortMode) {
         </dl>
         ${pathVariants}
         ${fileRows ? `<div class="cookbook-inventory-files">${fileRows}</div>` : ''}
+        ${_profileCounts ? `<div class="cookbook-inventory-actions"><button type="button" class="cookbook-inventory-create-profile" data-create-profile="${esc(artifact.id)}">Create profile for this artifact</button></div>` : ''}
       </div>
     </article>`;
 }
@@ -256,6 +272,15 @@ export function initInventory({ available = false, provider = null } = {}) {
   search?.addEventListener('input', _render);
   sort?.addEventListener('change', _render);
   refresh?.addEventListener('click', () => loadInventory({ force: true }));
+  if (!document._cookbookInventoryCoverageBound) {
+    document._cookbookInventoryCoverageBound = true;
+    document.addEventListener('cookbook:profile-coverage', event => {
+      const counts = event?.detail?.counts;
+      if (!counts || typeof counts !== 'object') return;
+      _profileCounts = counts;
+      _render();
+    });
+  }
   const toggle = target => {
     const item = target?.closest?.('.cookbook-inventory-item');
     if (!item) return;
@@ -286,6 +311,23 @@ export function initInventory({ available = false, provider = null } = {}) {
           copyButton.textContent = 'Copied';
           window.setTimeout(() => { copyButton.textContent = 'Copy'; }, 1200);
         }).catch(() => {});
+      }
+      return;
+    }
+    const createButton = event.target?.closest?.('[data-create-profile]');
+    if (createButton) {
+      // Authoring starts from the artifact, because that is where the operator
+      // notices one has no profile. Making them remember an artifact, change
+      // tab, and pick it out of a second list is the clunk this removes.
+      event.preventDefault();
+      event.stopPropagation();
+      const artifact = (_document?.artifacts || []).find(
+        candidate => candidate.id === createButton.dataset.createProfile,
+      );
+      if (artifact) {
+        document.dispatchEvent(new CustomEvent('cookbook:create-profile-for', {
+          detail: { provider: _document?.provider || null, artifact },
+        }));
       }
       return;
     }

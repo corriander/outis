@@ -266,6 +266,74 @@ synchronous capability document does not enumerate them: it reports only that an
 external ProfileService is configured (`profile_service.external`) and its
 display provider, because honest enumeration requires a live call.
 
+## The profile authoring island
+
+A configured ProfileService adds a **Profiles** tab to the Cookbook. The tab is
+keyed on `profile_service.external`, never on `read`/`write`: those two gate the
+inherited host-side profile routes and stay native-only, so an external provider
+can never switch on the local-file implementation.
+
+Outis owns the authoring experience and nothing else. Every control in the tab
+is derived from the service's own form document, so **no profile field is named
+anywhere in Outis** — not in the browser module, not in its model, not in this
+document. The form vocabulary the editor understands is provider-neutral:
+
+- `groups[]` — `{id, label, order}` sections, rendered in the provider's order.
+- `fields[]` — `{id, label, kind, widget, group, order, help, default, nullable}`
+  plus optional `constraints` (`min`, `max`, `pattern`), `allowed` for a closed
+  set, and `item` for the element type of a list.
+- `widget_fallbacks` — a `kind`-to-`widget` map for fields that omit `widget`.
+
+Recognised widgets are `text`, `number`, `toggle`, `select`, and `chips`. An
+unrecognised widget, kind, or group is **rendered anyway** — as a text control in
+a trailing section — rather than dropped. Dropping it would hide a value that a
+replace still submits, and a replace omits nothing.
+
+That is the central constraint on the editor: **replace is lossy by design**. The
+service clears any key a `PUT` omits, so the editor always submits a complete
+values object, including untouched fields and including any key present in the
+loaded profile that its copy of the form does not declare. A provider that gains
+a field after the browser fetched the form must not have it wiped by an editor
+that never knew about it.
+
+Validation stays with the service. The editor debounces a `preview` call while
+the user types and renders the returned field- and profile-level messages
+against the pointers the service filed them under (`/values/<field>` addresses a
+field; `/`, `/artifact_ref`, and `/artifact_ref/<key>` are profile-level). It
+also derives advisory local hints from the provider's own `constraints`, but
+those never gate submission — duplicating provider rules in the browser would
+only let the two drift.
+
+Three states are handled as first-class outcomes rather than errors:
+
+- **Validation failure.** The draft is untouched; the service's messages appear
+  against their fields.
+- **Provider outage.** The draft is untouched and stays editable; the failure is
+  reported on the panel and nowhere else in the Cookbook.
+- **Stale edit.** A `412` never discards the draft. The editor re-reads the
+  profile, shows the conflict alongside the user's version, and offers an
+  explicit choice: adopt the provider's version, or keep the local draft and
+  overwrite at the version just read. Nothing is written until the user picks.
+
+Deleting is offered only for a persisted profile, behind a confirmation, and
+only at a version the user has actually seen — the `If-Match` is what makes it
+mean "delete the thing I was shown" rather than "delete whatever is there now".
+A refused precondition takes the same path as a refused save: nothing is
+removed, and resolving the conflict is what adopts the version just read.
+
+The inventory tab's `cookbook:artifact-selected` event is the hand-off between
+the two islands. Selecting an artifact only *records* it as context; seeding a
+draft from it is a separate, explicit action, so browsing the inventory can
+never discard an in-progress draft. The selected artifact is submitted as an
+`{authority, artifact_id, observation}` reference — the same projection the
+server-side client enforces — and the editor warns, without blocking, when the
+service's `accepted_authorities` does not list that authority.
+
+Contract normalization, the form vocabulary, and the editor state machine live
+in `frontend/cookbookProfileEditorModel.ts`; `npm run build:profiles` emits the
+committed no-build-browser module consumed by the handwritten DOM adapter in
+`static/js/cookbookProfiles.js`.
+
 ## Boundary scope
 
 This policy governs Cookbook-specific HTTP routes, frontend controls, and agent
@@ -280,14 +348,15 @@ in `static/js/cookbook.js`. Existing Launch, Download, Dependencies, and
 Settings behavior remains supported, but substantial provider-backed authoring
 must not extend that module into the source of truth for profiles.
 
-Profile authoring should enter as an isolated TypeScript frontend module, with
-its own build and test boundary, over the `ArtifactStore` and `ProfileService`
-contracts. Its domain model owns profile identity, shared values, variants,
-validation, and deployment intent. INI files and other runtime formats are
-projections of that model rather than records the browser duplicates and edits
-directly. Local inventory, remote catalogue results, authored profiles, and
-runtime state may later share presentation components, but remain distinct
-domain objects.
+Profile authoring accordingly enters as an isolated TypeScript frontend module,
+with its own build and test boundary, over the `ArtifactStore` and
+`ProfileService` contracts. Validation and persistence belong to the service;
+the module owns the editable draft, its version handle, and the mapping from the
+provider's form vocabulary onto controls. INI files and other runtime formats
+are projections the service maintains rather than records the browser duplicates
+and edits directly. Local inventory, remote catalogue results, authored
+profiles, and runtime state may later share presentation components, but remain
+distinct domain objects.
 
 This boundary does not require rewriting the inherited Cookbook before useful
 provider-backed slices can ship. Read-only inventory can remain a separate
