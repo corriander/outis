@@ -26,6 +26,7 @@ _IMPORTS = ", ".join(
         "artifactMatchOf",
         "artifactRefFor",
         "authorityAccepted",
+        "beginCopy",
         "beginDraft",
         "beginEdit",
         "canDelete",
@@ -374,6 +375,99 @@ def test_a_replace_without_a_version_is_refused_before_it_becomes_a_428():
     )
 
     assert _run("canSubmit(s)", setup) is False
+
+
+# -- copying an existing profile ------------------------------------------
+
+SOURCE = json.dumps(
+    {
+        "values": {
+            "title": "source",
+            "tags": ["text", "vision"],
+            "threads": 12,
+            "site": "remote",
+            "verbose": True,
+            "added_after_this_release": "kept",
+        },
+        "artifact_ref": {"authority": "store-a", "artifact_id": "abc"},
+    }
+)
+
+# A fresh draft: a name that steps around the ones already taken, and every
+# other field left where the form declares its default.
+COPY_DRAFT = json.dumps(
+    {
+        "data": {
+            "values": {
+                "title": "source-2",
+                "tags": ["text"],
+                "threads": None,
+                "site": "local",
+                "verbose": False,
+            },
+            "form_version": 1,
+            "artifact_ref": {"authority": "store-a", "artifact_id": "abc"},
+        },
+        "warnings": [],
+    }
+)
+
+
+@pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
+def test_a_copy_takes_only_what_the_draft_deliberately_seeded():
+    values = _run(f"beginCopy(createEditorState(), FORM, {SOURCE}, {COPY_DRAFT}).values", SETUP)
+
+    # The draft named it away from its source; that is what the draft is for.
+    assert values["title"] == "source-2"
+    # Everything the draft left at the form's declared default belongs to the
+    # source -- including a nullable field the draft has nothing to say about,
+    # which is how a copy keeps its tuning instead of arriving blank.
+    assert values["threads"] == 12
+    assert values["site"] == "remote"
+    assert values["verbose"] is True
+    assert values["tags"] == ["text", "vision"]
+
+
+@pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
+def test_a_copy_without_a_draft_carries_every_value_untouched():
+    # An unbound profile has no artifact to seed a draft from. The copy is
+    # still worth making; the provider is what refuses the duplicate name.
+    values = _run(f"beginCopy(createEditorState(), FORM, {SOURCE}).values", SETUP)
+
+    assert values["title"] == "source"
+    assert values["threads"] == 12
+
+
+@pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
+def test_a_copy_is_a_new_profile_with_no_version_to_precondition_on():
+    state = _run(f"beginCopy(createEditorState(), FORM, {SOURCE}, {COPY_DRAFT})", SETUP)
+
+    assert state["mode"] == "new"
+    assert state["profileId"] is None
+    assert state["etag"] is None
+    # The copy launches what its source launched.
+    assert state["artifactRef"] == {"authority": "store-a", "artifact_id": "abc"}
+
+
+@pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
+def test_a_copy_is_dirty_from_the_outset():
+    # A copy is made in order to be saved, so browsing away from an untouched
+    # one still has to ask -- unlike a seeded draft, which costs nothing.
+    setup = SETUP + f"let s = beginCopy(createEditorState(), FORM, {SOURCE}, {COPY_DRAFT});"
+
+    assert _run("isDirty(s)", setup) is True
+    assert _run("canSubmit(s)", setup) is True
+
+
+@pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
+def test_a_copy_submits_provider_keys_the_form_never_declared():
+    # The copy starts with an empty baseline, so the undeclared keys have to
+    # survive on the values themselves or a create would silently drop them.
+    setup = SETUP + f"let s = beginCopy(createEditorState(), FORM, {SOURCE}, {COPY_DRAFT});"
+    payload = _run("submissionValues(FORM, s.values, s.baseline)", setup)
+
+    assert payload["added_after_this_release"] == "kept"
+    assert payload["title"] == "source-2"
 
 
 @pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
