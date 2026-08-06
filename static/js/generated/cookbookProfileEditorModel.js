@@ -537,6 +537,58 @@ export function beginEdit(state, document, profile, etag) {
         conflict: null,
     };
 }
+/**
+ * Start a new profile from an existing one's values ("save as").
+ *
+ * A copy is a *new* profile, so wherever the provider deliberately seeded a
+ * fresh draft — a name that steps around the ones already taken, above all —
+ * that seed wins over the source's value. Whatever the draft left at the
+ * form's declared default is the source's to keep, and that is what makes
+ * this a copy rather than a new profile of a familiar shape.
+ *
+ * The rule names no field: the provider decides what a fresh profile differs
+ * in, and this honours the answer without knowing the question. With no draft
+ * — the source binds no artifact, so there is nothing to seed from — the
+ * values carry over untouched and the provider's collision refusal is what
+ * names a free spelling.
+ */
+export function beginCopy(state, document, source, draftBody) {
+    const values = seededValues(document, source.values);
+    const envelope = isRecord(draftBody) ? draftBody : {};
+    const data = isRecord(envelope.data) ? envelope.data : {};
+    const seeded = isRecord(data.values) ? data.values : null;
+    if (seeded) {
+        for (const field of formFields(document)) {
+            if (!(field.id in seeded))
+                continue;
+            const declared = "default" in field ? field.default ?? null : null;
+            // Matching the declared default means the draft did not speak to this
+            // field; only a deliberate seed displaces what was copied. Compared
+            // through `valuesEqual` so a list-valued default compares by element.
+            if (valuesEqual({ value: seeded[field.id] }, { value: declared }))
+                continue;
+            values[field.id] = seeded[field.id];
+        }
+    }
+    return {
+        ...state,
+        mode: "new",
+        profileId: null,
+        // Nothing is persisted yet, so there is no version to precondition on.
+        etag: null,
+        artifactRef: source.artifact_ref,
+        values,
+        // Dirty from birth, unlike a seeded draft: a copy is made *in order to*
+        // be saved, so browsing away from an untouched one has to ask first.
+        // Undeclared provider keys still reach a submission through `values`,
+        // which carries every key the source had.
+        baseline: {},
+        fieldErrors: {},
+        formErrors: [],
+        warnings: feedbackEntries(envelope.warnings),
+        conflict: null,
+    };
+}
 export function setFieldValue(state, field, raw) {
     if (!isRecord(field) || typeof field.id !== "string")
         return state;

@@ -321,6 +321,23 @@ mean "delete the thing I was shown" rather than "delete whatever is there now".
 A refused precondition takes the same path as a refused save: nothing is
 removed, and resolving the conflict is what adopts the version just read.
 
+**Save as…** opens the values currently on screen as a new profile, which is
+how a variant of an existing profile gets authored without retyping it. It
+copies what is displayed rather than what was last persisted, so an unsaved
+tweak comes with it, and the copy is dirty from the outset — it exists in order
+to be saved, so navigating away from an untouched one still asks.
+
+Naming the copy is the service's job, not the editor's. A copy of a profile
+that binds an artifact requests a fresh draft for that same artifact, and
+wherever the draft's value differs from the form's declared default, the
+draft's value wins over the copied one; everything the draft left at its
+default belongs to the source. That rule names no field: it lets the provider
+decide what a *new* profile differs in — a name that steps around the ones
+already taken, most of all — while the copy keeps its tuning. A profile that
+binds no artifact has nothing to seed a draft from, so its copy carries every
+value through unchanged and the service's own collision refusal, rendered
+against the field it blames, is what offers a free spelling.
+
 The inventory tab's `cookbook:artifact-selected` event is the hand-off between
 the two islands. Selecting an artifact only *records* it as context; seeding a
 draft from it is a separate, explicit action, so browsing the inventory can

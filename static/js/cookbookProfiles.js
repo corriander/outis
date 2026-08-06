@@ -15,6 +15,7 @@ import {
   applyWriteFailure,
   artifactRefFor,
   authorityAccepted,
+  beginCopy,
   beginDraft,
   beginEdit,
   canDelete,
@@ -279,6 +280,13 @@ function _renderActions() {
     save.textContent = _state.mode === 'new' ? 'Create profile' : 'Save changes';
   }
   if (revert) revert.disabled = _busy || !dirty;
+  const copy = _el('cookbook-profile-save-as');
+  if (copy) {
+    // Hidden while drafting for the same reason delete is: a draft is not yet
+    // a profile, so there is nothing to save a copy of.
+    copy.hidden = _state.mode !== 'editing';
+    copy.disabled = _busy || _state.mode !== 'editing';
+  }
   if (remove) {
     // Hidden rather than disabled while drafting: there is nothing persisted
     // for it to act on, so offering it at all would be misleading.
@@ -541,6 +549,52 @@ async function _startDraft({ fetchImpl = globalThis.fetch } = {}) {
     _setStatus('Draft seeded from the selected artifact. Nothing is saved yet.');
   } catch (error) {
     _setStatus(_transportMessage(error), 'error');
+  } finally {
+    _busy = false;
+    _renderAll();
+  }
+}
+
+/**
+ * Open the values in front of the operator as a new profile ("save as").
+ *
+ * Copies what is on screen rather than what was last persisted: an operator
+ * who tweaked a profile and then decided the tweak deserved its own name
+ * meant the tweak to come with it.
+ *
+ * A bound profile can ask the provider for a draft, whose name steps around
+ * the ones already taken, so the copy opens ready to save. An unbound one has
+ * no artifact to seed from, so its copy keeps the source's name and the
+ * provider's collision refusal is what offers a free spelling.
+ */
+async function _saveAs({ fetchImpl = globalThis.fetch } = {}) {
+  if (_state.mode !== 'editing' || !_form || _busy) return;
+  _busy = true;
+  _renderActions();
+  const source = { values: _state.values, artifact_ref: _state.artifactRef };
+  try {
+    let draft = null;
+    if (_state.artifactRef) {
+      const response = await _request('POST', '/draft', {
+        body: { artifact_ref: _state.artifactRef },
+        fetchImpl,
+      });
+      // A draft that does not arrive costs the copy its suggested name, not
+      // the copy itself.
+      if (response.ok) draft = response.body;
+    }
+    _state = beginCopy(_state, _form, source, draft);
+    // The binding the operator lined up was for the profile they were
+    // editing; it does not follow the copy into a different save.
+    _pendingBind = null;
+    // The copy launches the same path as its source, so what the island knows
+    // about that path -- its artifact and any match for it -- still holds.
+    _setStatus(draft
+      ? 'Copied to a new profile, named around the ones already taken. Nothing is saved yet.'
+      : 'Copied to a new profile. Give it a free name before saving. Nothing is saved yet.');
+  } catch (error) {
+    // The copy never happened, so the source is still what is open.
+    _setStatus(`${_transportMessage(error)} Your profile is still open.`, 'error');
   } finally {
     _busy = false;
     _renderAll();
@@ -884,6 +938,7 @@ export function profilesPanelHtml({ available = false, provider = null } = {}) {
               <h3 id="cookbook-profile-editing"></h3>
               <div class="cookbook-profile-actions">
                 <button type="button" class="hwfit-gpu-btn cookbook-profile-danger" id="cookbook-profile-delete" hidden disabled>Delete</button>
+                <button type="button" class="hwfit-gpu-btn" id="cookbook-profile-save-as" hidden disabled>Save as…</button>
                 <button type="button" class="hwfit-gpu-btn" id="cookbook-profile-revert" disabled>Revert</button>
                 <button type="button" class="hwfit-gpu-btn" id="cookbook-profile-save" disabled>Save changes</button>
               </div>
@@ -912,6 +967,7 @@ export function initProfiles({ available = false, provider = null } = {}) {
   _el('cookbook-profile-new')?.addEventListener('click', () => { _startDraft(); });
   _el('cookbook-profile-bind-all')?.addEventListener('click', () => { _bindAllMatched(); });
   _el('cookbook-profile-save')?.addEventListener('click', () => { _save(); });
+  _el('cookbook-profile-save-as')?.addEventListener('click', () => { _saveAs(); });
   _el('cookbook-profile-revert')?.addEventListener('click', _revert);
   _el('cookbook-profile-delete')?.addEventListener('click', () => { _delete(); });
 

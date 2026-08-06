@@ -22995,6 +22995,9 @@ body.gallery-selecting .gallery-dl-btn,
 
 .cookbook-profile-actions {
   display: flex;
+  /* Four controls now, so a narrow panel wraps them rather than pushing the
+     rightmost one out of reach. */
+  flex-wrap: wrap;
   flex-shrink: 0;
   gap: 5px;
 }
