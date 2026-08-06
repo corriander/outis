@@ -277,7 +277,7 @@ function _renderActions() {
   const dirty = isDirty(_state);
   if (save) {
     save.disabled = _busy || !canSubmit(_state);
-    save.textContent = _state.mode === 'new' ? 'Create profile' : 'Save changes';
+    save.textContent = _state.mode === 'new' ? 'Create profile' : 'Save';
   }
   if (revert) revert.disabled = _busy || !dirty;
   const copy = _el('cookbook-profile-save-as');
@@ -938,9 +938,9 @@ export function profilesPanelHtml({ available = false, provider = null } = {}) {
               <h3 id="cookbook-profile-editing"></h3>
               <div class="cookbook-profile-actions">
                 <button type="button" class="hwfit-gpu-btn cookbook-profile-danger" id="cookbook-profile-delete" hidden disabled>Delete</button>
-                <button type="button" class="hwfit-gpu-btn" id="cookbook-profile-save-as" hidden disabled>Save as…</button>
                 <button type="button" class="hwfit-gpu-btn" id="cookbook-profile-revert" disabled>Revert</button>
-                <button type="button" class="hwfit-gpu-btn" id="cookbook-profile-save" disabled>Save changes</button>
+                <button type="button" class="hwfit-gpu-btn" id="cookbook-profile-save-as" hidden disabled>Save as…</button>
+                <button type="button" class="hwfit-gpu-btn" id="cookbook-profile-save" disabled>Save</button>
               </div>
             </div>
             <div id="cookbook-profile-banner" class="cookbook-profile-banner"></div>
