@@ -392,12 +392,19 @@ Then enable the Odysseus NVIDIA compose overlay:
 COMPOSE_FILE=docker-compose.yml:docker/gpu.nvidia.yml
 ```
 
-Rebuild and verify the GPU inside the Odysseus container:
+Rebuild, wait until the application is serving, and verify the GPU inside the
+Odysseus container:
 
 ```bash
-docker compose up -d --build
+docker compose up -d --build --wait
 docker compose exec odysseus nvidia-smi -L
 ```
+
+The application service probes its auth-exempt `/api/health` route from inside
+the container. `docker compose up -d --wait` therefore returns only after the
+web server answers, rather than when the container process has merely started.
+The first minute is a cold-start grace period; a start that remains broken after
+that grace and the configured retries becomes `unhealthy`.
 
 For first-time local model testing on 8 GB laptop GPUs, start with GGUF/Q4 models on llama.cpp before trying GPTQ/AWQ models on vLLM or SGLang. This keeps the first run simpler while confirming GPU passthrough works.
 
