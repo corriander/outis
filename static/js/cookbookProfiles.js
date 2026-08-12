@@ -51,6 +51,7 @@ export {
 };
 
 const PREFIX = '/api/cookbook/profile-service';
+const RUNTIME_PREFIX = '/api/cookbook/runtime-controller';
 
 // Long enough that ordinary typing does not fire a request per keystroke,
 // short enough that feedback still feels attached to the edit.
@@ -58,6 +59,7 @@ const PREVIEW_DEBOUNCE_MS = 600;
 
 let _available = false;
 let _provider = null;
+let _applyAvailable = false;
 let _service = null;
 let _form = null;
 let _profiles = [];
@@ -274,6 +276,7 @@ function _renderActions() {
   const save = _el('cookbook-profile-save');
   const revert = _el('cookbook-profile-revert');
   const remove = _el('cookbook-profile-delete');
+  const apply = _el('cookbook-profile-apply');
   const dirty = isDirty(_state);
   if (save) {
     save.disabled = _busy || !canSubmit(_state);
@@ -292,6 +295,12 @@ function _renderActions() {
     // for it to act on, so offering it at all would be misleading.
     remove.hidden = _state.mode !== 'editing';
     remove.disabled = _busy || !canDelete(_state);
+  }
+  if (apply) {
+    // Applying acts on the provider's saved profile set. A dirty editor would
+    // make it too easy to mistake local, unsaved values for what gets picked up.
+    apply.hidden = !_applyAvailable;
+    apply.disabled = _busy || dirty || _state.mode !== 'editing';
   }
 }
 
@@ -879,6 +888,73 @@ function _revert() {
   _setStatus('Reverted to the last loaded version.');
 }
 
+function _runtimeMessage(body) {
+  return _envelopeMessage(body) || 'The runtime controller refused the request.';
+}
+
+export function runtimeEvictionConflict(status, body) {
+  if (status !== 409 || !Array.isArray(body?.errors)) return null;
+  return body.errors.find(error => error?.code === 'would_evict') || null;
+}
+
+export function runtimeApplySummary(body) {
+  const data = body?.data || {};
+  const warnings = Array.isArray(body?.warnings) ? body.warnings : [];
+  const details = [
+    data.configuration ? `Configuration ${data.configuration}.` : null,
+    data.state ? `Runtime ${data.state}.` : null,
+    Array.isArray(data.evicted) && data.evicted.length
+      ? `Evicted: ${data.evicted.join(', ')}.`
+      : null,
+    warnings[0]?.message || null,
+  ].filter(Boolean).join(' ');
+  return `Saved profiles applied.${details ? ` ${details}` : ''}`;
+}
+
+async function _applyProfiles({ allowEviction = false, fetchImpl = globalThis.fetch } = {}) {
+  if (!_applyAvailable || _busy || _state.mode !== 'editing' || isDirty(_state)) return;
+  _busy = true;
+  _renderActions();
+  _setStatus(allowEviction ? 'Applying profiles and replacing loaded work…' : 'Applying saved profiles…');
+  try {
+    const response = await fetchImpl(`${RUNTIME_PREFIX}/apply`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ allow_eviction: allowEviction }),
+    });
+    let body = null;
+    try { body = await response.json(); } catch {}
+    const wouldEvict = runtimeEvictionConflict(response.status, body);
+    if (wouldEvict && !allowEviction) {
+      const models = Array.isArray(wouldEvict.meta?.models) ? wouldEvict.meta.models : [];
+      const loaded = models.length ? `\n\nLoaded: ${models.join(', ')}` : '';
+      const message = `Applying profiles will evict loaded work and may interrupt requests.${loaded}`;
+      const styled = window.styledConfirm;
+      const confirmed = styled
+        ? await styled(message, { confirmText: 'Continue', cancelText: 'Wait' })
+        : (window.confirm ? window.confirm(message) : false);
+      if (confirmed) {
+        _busy = false;
+        await _applyProfiles({ allowEviction: true, fetchImpl });
+      } else {
+        _setStatus('Apply deferred. Nothing was changed.');
+      }
+      return;
+    }
+    if (!response.ok) {
+      _setStatus(_runtimeMessage(body), 'error');
+      return;
+    }
+    _setStatus(runtimeApplySummary(body));
+  } catch (error) {
+    _setStatus(error?.message || 'The runtime controller could not be reached.', 'error');
+  } finally {
+    _busy = false;
+    _renderActions();
+  }
+}
+
 // ── wiring ──
 
 function _fieldAt(index) {
@@ -910,7 +986,12 @@ function _onFieldInput(event) {
   _schedulePreview();
 }
 
-export function profilesPanelHtml({ available = false, provider = null } = {}) {
+export function profilesPanelHtml({
+  available = false,
+  provider = null,
+  applyAvailable = false,
+  runtimeProvider = null,
+} = {}) {
   const providerText = provider ? `Provider: ${esc(provider)}` : 'No external ProfileService configured';
   return `
     <div class="cookbook-group hidden" data-backend-group="Profiles">
@@ -929,6 +1010,7 @@ export function profilesPanelHtml({ available = false, provider = null } = {}) {
           <button type="button" class="hwfit-gpu-btn" id="cookbook-profile-new" disabled>New profile</button>
           <button type="button" class="hwfit-gpu-btn cookbook-profile-bind-all" id="cookbook-profile-bind-all" hidden></button>
           <span id="cookbook-profile-provider">${providerText}</span>
+          ${applyAvailable ? `<span class="cookbook-profile-provider">Runtime: ${esc(runtimeProvider || 'external controller')}</span>` : ''}
         </div>
         <div id="cookbook-profile-status" class="cookbook-profile-status">${available ? 'Open this tab to load the profile service.' : 'Configure an external ProfileService provider to author profiles.'}</div>
         <div class="cookbook-profile-body">
@@ -941,6 +1023,7 @@ export function profilesPanelHtml({ available = false, provider = null } = {}) {
                 <button type="button" class="hwfit-gpu-btn" id="cookbook-profile-revert" disabled>Revert</button>
                 <button type="button" class="hwfit-gpu-btn" id="cookbook-profile-save-as" hidden disabled>Save as…</button>
                 <button type="button" class="hwfit-gpu-btn" id="cookbook-profile-save" disabled>Save</button>
+                <button type="button" class="hwfit-gpu-btn" id="cookbook-profile-apply"${applyAvailable ? '' : ' hidden'} disabled>Apply profiles</button>
               </div>
             </div>
             <div id="cookbook-profile-banner" class="cookbook-profile-banner"></div>
@@ -951,7 +1034,11 @@ export function profilesPanelHtml({ available = false, provider = null } = {}) {
     </div>`;
 }
 
-export function initProfiles({ available = false, provider = null } = {}) {
+export function initProfiles({
+  available = false,
+  provider = null,
+  applyAvailable = false,
+} = {}) {
   if (_provider !== (provider || null)) {
     _form = null;
     _service = null;
@@ -962,6 +1049,7 @@ export function initProfiles({ available = false, provider = null } = {}) {
   }
   _available = available === true;
   _provider = provider || null;
+  _applyAvailable = applyAvailable === true;
 
   _el('cookbook-profile-refresh')?.addEventListener('click', () => loadProfiles({ force: true }));
   _el('cookbook-profile-new')?.addEventListener('click', () => { _startDraft(); });
@@ -970,6 +1058,7 @@ export function initProfiles({ available = false, provider = null } = {}) {
   _el('cookbook-profile-save-as')?.addEventListener('click', () => { _saveAs(); });
   _el('cookbook-profile-revert')?.addEventListener('click', _revert);
   _el('cookbook-profile-delete')?.addEventListener('click', () => { _delete(); });
+  _el('cookbook-profile-apply')?.addEventListener('click', () => { _applyProfiles(); });
 
   const list = _el('cookbook-profile-list');
   list?.addEventListener('click', event => {

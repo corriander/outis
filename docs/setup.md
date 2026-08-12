@@ -156,11 +156,11 @@ whole for capability reporting and inventory requests. The environment-only
 configuration above remains supported when no persisted bootstrap exists.
 `OUTIS_COOKBOOK_MODE` remains an independent deployment choice.
 
-##### Bootstrapping a ProfileService at the same time
+##### Bootstrapping optional profile providers at the same time
 
-ArtifactStore and ProfileService are independent roles. Adding
-`OUTIS_PROFILE_SERVICE_URL` and `OUTIS_PROFILE_SERVICE_TOKEN` to the same
-`apply` converges both in one transaction under one shared revision:
+ArtifactStore, ProfileService, and RuntimeController are independent roles.
+Adding the optional role inputs to the same `apply` converges all three in one
+transaction under one shared revision:
 
 ```bash
 docker compose run --rm --no-deps \
@@ -170,12 +170,17 @@ docker compose run --rm --no-deps \
   -e OUTIS_ARTIFACT_STORE_TOKEN \
   -e OUTIS_PROFILE_SERVICE_URL \
   -e OUTIS_PROFILE_SERVICE_TOKEN \
+  -e OUTIS_RUNTIME_CONTROLLER_URL \
+  -e OUTIS_RUNTIME_CONTROLLER_TOKEN \
+  -e OUTIS_RUNTIME_CONTROLLER_TARGET \
   odysseus python -m src.managed_bootstrap apply
 ```
 
-ProfileService is optional and verified independently, by a best-effort
-request to `/v1/service`. As with the inventory provider, an unreachable
-service does not block configuration.
+ProfileService and RuntimeController are optional and verified independently,
+by best-effort requests to `/v1/service`. As with the inventory provider, an
+unreachable service does not block configuration. The controller target is an
+opaque provider noun and is persisted with that role; it is never inferred
+from the profile or inventory services.
 
 `verified` means "this exact configuration has been reached successfully at
 some point", not "was reachable during this run". Newly supplied or changed
@@ -186,25 +191,23 @@ configuration is not in question, only the provider's availability, which is
 runtime health rather than bootstrap state. Change any of a role's inputs and
 verification starts again from false.
 
-A deployment may deliberately give both roles the same endpoint and bearer,
-but neither role is ever inferred from the other: configuring an ArtifactStore
-does not configure a ProfileService.
+A deployment may deliberately give multiple roles the same endpoint and
+bearer, but no role is ever inferred from another.
 
 **Omitting a role leaves it alone.** An `apply` that supplies no
-ProfileService inputs does not address that role at all — existing
-ProfileService state is untouched and the shared revision does not change. An
-ArtifactStore-only deployment manager therefore needs no changes, and one that
-has configured both can re-run either alone. There is currently no way to
+optional-role inputs does not address that role at all — its existing state is
+untouched and the shared revision does not change. An ArtifactStore-only
+deployment manager therefore needs no changes. There is currently no way to
 retire a configured role through `apply`; remove its state file to do that.
 
-ArtifactStore is required on every run and ProfileService is not. That is an
-ordering, not a coupling: a profile is authored against an artifact, so a
-ProfileService with no inventory to address has nothing to work on. The roles
-remain independent in every other respect.
+ArtifactStore is required on every run; ProfileService and RuntimeController
+are not. That is ordering, not coupling: profiles are authored against
+artifacts and applied only after they exist.
 
 The revision and managed administrator live in `data/managed_bootstrap.json`,
-with each role's provider configuration in `data/artifact_store.json` and
-`data/profile_service.json`. Deployments bootstrapped before ProfileService
+with each role's provider configuration in `data/artifact_store.json`,
+`data/profile_service.json`, and `data/runtime_controller.json`. Deployments
+bootstrapped before ProfileService
 existed kept those two fields inside `data/artifact_store.json`; they are read
 as they are, and the next `apply` writes the current layout without changing
 the revision.

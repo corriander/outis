@@ -17,6 +17,10 @@ from profile_service.client import (
     configured_profile_service_name,
     profile_service_configured,
 )
+from runtime_controller.client import (
+    configured_runtime_controller_name,
+    runtime_controller_configured,
+)
 
 
 _NATIVE_VALUES = {"native", "odysseus"}
@@ -35,6 +39,10 @@ def cookbook_capabilities() -> dict:
     # flags below), and it is only reachable through the same-origin proxy.
     external_profiles = profile_service_configured()
     profile_provider = configured_profile_service_name() if external_profiles else provider
+    external_runtime = runtime_controller_configured()
+    runtime_provider = (
+        configured_runtime_controller_name() if external_runtime else provider
+    )
 
     return {
         "schema_version": 1,
@@ -77,11 +85,15 @@ def cookbook_capabilities() -> dict:
                 },
             },
             "runtime_controller": {
-                "provider": provider,
+                "provider": runtime_provider,
                 "status": native,
                 "start": native,
                 "stop": native,
                 "logs": native,
+                # Applying the provider-owned profile set is independent of
+                # inherited process launch. The browser receives no target;
+                # that opaque deployment choice stays in server-side config.
+                "apply_profiles": external_runtime,
             },
         },
     }

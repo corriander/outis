@@ -765,6 +765,10 @@ app.include_router(setup_artifact_routes())
 from routes.profile_service_routes import setup_profile_service_routes
 app.include_router(setup_profile_service_routes())
 
+# Provider-backed profile-set application (separate from profile persistence)
+from routes.runtime_controller_routes import setup_runtime_controller_routes
+app.include_router(setup_runtime_controller_routes())
+
 from routes.workspace_routes import setup_workspace_routes
 app.include_router(setup_workspace_routes())
 

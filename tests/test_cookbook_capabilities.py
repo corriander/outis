@@ -37,6 +37,7 @@ def test_external_mode_is_catalogue_only(monkeypatch):
     assert document["capabilities"]["artifact_store"]["list"] is False
     assert document["capabilities"]["profile_service"]["write"] is False
     assert document["capabilities"]["runtime_controller"]["start"] is False
+    assert document["capabilities"]["runtime_controller"]["apply_profiles"] is False
 
 
 def test_native_mode_preserves_upstream_operations(monkeypatch):
@@ -52,6 +53,22 @@ def test_native_mode_preserves_upstream_operations(monkeypatch):
     assert capabilities["profile_service"]["write"] is True
     assert capabilities["runtime_controller"]["start"] is True
     assert capabilities["runtime_controller"]["stop"] is True
+
+
+def test_external_runtime_controller_is_an_independent_additive_capability(monkeypatch):
+    monkeypatch.setenv("OUTIS_COOKBOOK_MODE", "external")
+    monkeypatch.setenv("OUTIS_RUNTIME_CONTROLLER_URL", "http://controller.test:8850")
+    monkeypatch.setenv("OUTIS_RUNTIME_CONTROLLER_TOKEN", "secret")
+    monkeypatch.setenv("OUTIS_RUNTIME_CONTROLLER_TARGET", "deployment")
+    monkeypatch.setenv("OUTIS_RUNTIME_CONTROLLER_NAME", "Managed runtime")
+
+    runtime = __import__(
+        "src.cookbook_capabilities", fromlist=["cookbook_capabilities"]
+    ).cookbook_capabilities()["capabilities"]["runtime_controller"]
+
+    assert runtime["provider"] == "Managed runtime"
+    assert runtime["apply_profiles"] is True
+    assert runtime["start"] is False
 
 
 @pytest.mark.parametrize("mode", ["native", "external"])

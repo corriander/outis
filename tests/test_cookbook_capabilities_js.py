@@ -42,6 +42,8 @@ def test_external_mode_keeps_browse_and_removes_native_actions():
         "profiles": False,
         "profileEditor": False,
         "profileProvider": None,
+        "profileApply": False,
+        "runtimeProvider": None,
         "launch": False,
         "nativeSettings": False,
     }
@@ -92,3 +94,12 @@ def test_native_cache_listing_is_not_presented_as_external_inventory():
 
     assert policy["inventory"] is False
     assert policy["inventoryProvider"] is None
+
+
+@pytest.mark.skipif(not HAS_NODE, reason="node binary not on PATH")
+def test_external_runtime_controller_enables_apply_without_native_launch():
+    policy = _run("cookbookUiPolicy({mode:'external',capabilities:{runtime_controller:{provider:'external-controller',start:false,apply_profiles:true}}})")
+
+    assert policy["profileApply"] is True
+    assert policy["runtimeProvider"] == "external-controller"
+    assert policy["launch"] is False
