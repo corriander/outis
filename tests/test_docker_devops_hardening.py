@@ -31,6 +31,11 @@ def _compose_env_names(path: Path) -> set[str]:
     return {entry.split("=", 1)[0] for entry in env}
 
 
+def _app_healthcheck(path: Path) -> dict:
+    compose = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return compose["services"]["odysseus"]["healthcheck"]
+
+
 def _upload_limit_env_names() -> set[str]:
     source = (ROOT / "src" / "upload_limits.py").read_text(encoding="utf-8")
     return set(re.findall(r'"(ODYSSEUS_[A-Z_]*BYTES)"', source)) | {
@@ -59,6 +64,28 @@ def test_default_compose_files_do_not_mount_host_docker_socket():
     for path in COMPOSE_FILES:
         text = path.read_text(encoding="utf-8")
         assert "/var/run/docker.sock" not in text, path.name
+
+
+def test_app_healthcheck_is_auth_safe_dependency_free_and_consistent():
+    healthchecks = [_app_healthcheck(path) for path in COMPOSE_FILES]
+
+    assert healthchecks[1:] == healthchecks[:-1]
+    healthcheck = healthchecks[0]
+    assert healthcheck["test"][:3] == ["CMD", "python", "-c"]
+    probe = healthcheck["test"][3]
+    assert "http://127.0.0.1:7000/api/health" in probe
+    assert "curl" not in probe
+    assert healthcheck["start_period"] == "60s"
+    assert healthcheck["timeout"] == "5s"
+    assert healthcheck["retries"] == 12
+
+
+def test_app_health_route_stays_exempt_from_authentication():
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
+    exempt = source.index('"/api/health",')
+    route = source.index('@app.get("/api/health")')
+
+    assert exempt < route
 
 
 def test_host_docker_overlay_mounts_socket_and_adds_docker_group():
