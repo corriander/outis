@@ -6,17 +6,13 @@ run, then ordinary application starts use only the persistent managed state.
 Run ``apply`` only while the main Outis application process is stopped so its
 in-memory authentication state cannot diverge from the shared data directory.
 
-A run converges one or more independent provider roles as a single
-transaction under a single revision. ArtifactStore is required and
-ProfileService is optional, which is an ordering rather than a coupling: a
-profile is authored against an artifact, so a ProfileService with no inventory
-to address has nothing to work on. The roles stay independent in every other
-respect -- neither is inferred from the other, and neither reads the other's
-configuration. A run that supplies no ProfileService inputs does
-not address that role at all: existing ProfileService state is left exactly as
-it was and contributes nothing to whether the revision changes, so an
-ArtifactStore-only deployment behaves identically whether or not a
-ProfileService was ever configured.
+A run converges one or more independent provider roles as a single transaction
+under a single revision. ArtifactStore is required; ProfileService and
+RuntimeController are optional. This is ordering, not coupling: authoring and
+applying profiles are useful after inventory exists, but no role is inferred
+from another or reads another's configuration. An optional role omitted from a
+run is left exactly as it was and contributes nothing to whether the revision
+changes.
 """
 
 from __future__ import annotations
@@ -34,11 +30,14 @@ import httpx
 
 import artifact_store.config as artifact_store_config
 import profile_service.config as profile_service_config
+import runtime_controller.config as runtime_controller_config
 from artifact_store.client import ArtifactStoreClient, ArtifactStoreError
 from artifact_store.config import ArtifactStoreConfigurationError
 from core.auth import AuthManager, validate_managed_admin_credentials
 from profile_service.client import ProfileServiceClient, ProfileServiceError
 from profile_service.config import ProfileServiceConfigurationError
+from runtime_controller.client import RuntimeControllerClient, RuntimeControllerError
+from runtime_controller.config import RuntimeControllerConfigurationError
 from src.constants import AUTH_FILE
 from src.managed_transaction import (
     ManagedTransactionError,
@@ -96,7 +95,20 @@ PROFILE_SERVICE_ROLE = _Role(
     required=False,
 )
 
-ROLES = (ARTIFACT_STORE_ROLE, PROFILE_SERVICE_ROLE)
+RUNTIME_CONTROLLER_ROLE = _Role(
+    key="runtime_controller",
+    label="RuntimeController",
+    config=runtime_controller_config,
+    configuration_error=RuntimeControllerConfigurationError,
+    client_error=RuntimeControllerError,
+    build_client=lambda configuration, transport: RuntimeControllerClient.from_configuration(
+        configuration, transport=transport
+    ),
+    probe=lambda client: client.get_service(),
+    required=False,
+)
+
+ROLES = (ARTIFACT_STORE_ROLE, PROFILE_SERVICE_ROLE, RUNTIME_CONTROLLER_ROLE)
 
 
 @dataclass
@@ -347,6 +359,7 @@ def main(argv: list[str] | None = None) -> int:
         ManagedTransactionError,
         ArtifactStoreConfigurationError,
         ProfileServiceConfigurationError,
+        RuntimeControllerConfigurationError,
         OSError,
         ValueError,
     ) as exc:

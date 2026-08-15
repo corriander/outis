@@ -351,6 +351,39 @@ in `frontend/cookbookProfileEditorModel.ts`; `npm run build:profiles` emits the
 committed no-build-browser module consumed by the handwritten DOM adapter in
 `static/js/cookbookProfiles.js`.
 
+## Applying saved profiles through an external controller
+
+Profile persistence and runtime actuation are separate capabilities. Configure
+the optional RuntimeController with:
+
+- `OUTIS_RUNTIME_CONTROLLER_URL` — absolute HTTP(S) service root;
+- `OUTIS_RUNTIME_CONTROLLER_TOKEN` — server-side bearer credential;
+- `OUTIS_RUNTIME_CONTROLLER_NAME` — optional display name;
+- `OUTIS_RUNTIME_CONTROLLER_TARGET` — required opaque deployment noun;
+- `OUTIS_RUNTIME_CONTROLLER_TIMEOUT` — request timeout, clamped to `[0.5, 300]`
+  seconds (default 60).
+
+The same values can be persisted by the managed one-shot bootstrap. Outis never
+infers them from ProfileService or ArtifactStore configuration, even when one
+service implements all three roles. The target stays server-side: the browser
+neither knows the provider's topology nor chooses a host or deployment.
+
+The admin-gated same-origin route
+`POST /api/cookbook/runtime-controller/apply` accepts only
+`{"allow_eviction": false}` (the default) and invokes the configured
+controller's advertised profile-set restart operation. A saved profile exposes
+**Apply profiles**; a draft or an editor with unsaved changes does not, because
+application always picks up the provider's persisted set rather than local form
+state. Saving remains non-actuating.
+
+Application is protected first. If the provider replies `409 would_evict`, the
+dialog names any loaded models and offers **Continue** or **Wait**. Continue
+retries once with `allow_eviction: true`; Wait performs no request and creates
+no queue. Other structured provider error outcomes are preserved. Successful
+responses are projected onto state, configuration, verification, eviction, and
+warnings; credentials, target and device nouns, provider diagnostics,
+redirects, and ambient proxy settings never reach or come from the browser.
+
 ## Boundary scope
 
 This policy governs Cookbook-specific HTTP routes, frontend controls, and agent

@@ -3231,6 +3231,8 @@ function _renderRecipes() {
   html += profilesPanelHtml({
     available: uiPolicy.profileEditor,
     provider: uiPolicy.profileProvider,
+    applyAvailable: uiPolicy.profileApply,
+    runtimeProvider: uiPolicy.runtimeProvider,
   });
 
   // Serve group
@@ -3341,6 +3343,7 @@ function _renderRecipes() {
   initProfiles({
     available: uiPolicy.profileEditor,
     provider: uiPolicy.profileProvider,
+    applyAvailable: uiPolicy.profileApply,
   });
 
   // Auto-init What Fits

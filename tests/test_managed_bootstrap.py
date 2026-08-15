@@ -8,6 +8,7 @@ import pytest
 def bootstrap_state(tmp_path, monkeypatch):
     import artifact_store.config as config
     import profile_service.config as profile_config
+    import runtime_controller.config as runtime_config
     import src.managed_bootstrap as bootstrap
     import src.managed_transaction as managed_transaction
     import src.secret_storage as secret_storage
@@ -17,6 +18,8 @@ def bootstrap_state(tmp_path, monkeypatch):
     candidate_path = tmp_path / "artifact_store.pending.json"
     profile_active_path = tmp_path / "profile_service.json"
     profile_candidate_path = tmp_path / "profile_service.pending.json"
+    runtime_active_path = tmp_path / "runtime_controller.json"
+    runtime_candidate_path = tmp_path / "runtime_controller.pending.json"
     transaction_path = tmp_path / "managed_bootstrap.json"
     key_path = tmp_path / ".app_key"
 
@@ -27,6 +30,14 @@ def bootstrap_state(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         profile_config, "PROFILE_SERVICE_CANDIDATE_FILE", str(profile_candidate_path)
+    )
+    monkeypatch.setattr(
+        runtime_config, "RUNTIME_CONTROLLER_CONFIG_FILE", str(runtime_active_path)
+    )
+    monkeypatch.setattr(
+        runtime_config,
+        "RUNTIME_CONTROLLER_CANDIDATE_FILE",
+        str(runtime_candidate_path),
     )
     monkeypatch.setattr(
         managed_transaction, "MANAGED_BOOTSTRAP_FILE", str(transaction_path)
@@ -48,6 +59,11 @@ def bootstrap_state(tmp_path, monkeypatch):
         "OUTIS_PROFILE_SERVICE_NAME",
         "OUTIS_PROFILE_SERVICE_TOKEN",
         "OUTIS_PROFILE_SERVICE_TIMEOUT",
+        "OUTIS_RUNTIME_CONTROLLER_URL",
+        "OUTIS_RUNTIME_CONTROLLER_NAME",
+        "OUTIS_RUNTIME_CONTROLLER_TOKEN",
+        "OUTIS_RUNTIME_CONTROLLER_TARGET",
+        "OUTIS_RUNTIME_CONTROLLER_TIMEOUT",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -57,10 +73,13 @@ def bootstrap_state(tmp_path, monkeypatch):
         "candidate": candidate_path,
         "profile_active": profile_active_path,
         "profile_candidate": profile_candidate_path,
+        "runtime_active": runtime_active_path,
+        "runtime_candidate": runtime_candidate_path,
         "transaction": transaction_path,
         "key": key_path,
         "config": config,
         "profile_config": profile_config,
+        "runtime_config": runtime_config,
         "bootstrap": bootstrap,
         "managed_transaction": managed_transaction,
         "auth_manager_cls": bootstrap.AuthManager,
@@ -383,6 +402,14 @@ def _set_profile_inputs(monkeypatch, *, token="profile-token"):
     monkeypatch.setenv("OUTIS_PROFILE_SERVICE_TIMEOUT", "12")
 
 
+def _set_runtime_inputs(monkeypatch, *, token="runtime-token"):
+    monkeypatch.setenv("OUTIS_RUNTIME_CONTROLLER_URL", "http://runtime.test:7333/")
+    monkeypatch.setenv("OUTIS_RUNTIME_CONTROLLER_NAME", "Managed runtime")
+    monkeypatch.setenv("OUTIS_RUNTIME_CONTROLLER_TOKEN", token)
+    monkeypatch.setenv("OUTIS_RUNTIME_CONTROLLER_TARGET", "deployment-noun")
+    monkeypatch.setenv("OUTIS_RUNTIME_CONTROLLER_TIMEOUT", "75")
+
+
 def _both_roles_transport(*, profile_status=200):
     """One transport serving both provider roles, routed by host.
 
@@ -399,6 +426,39 @@ def _both_roles_transport(*, profile_status=200):
             return httpx.Response(200, json=PROFILE_DISCOVERY)
         assert request.url == httpx.URL("http://provider.test:7331/v1/artifacts")
         assert request.headers.get("Authorization") == "Bearer provider-token"
+        return httpx.Response(
+            200,
+            json={
+                "schema_version": 1,
+                "provider": {"id": "managed-inventory"},
+                "status": {"state": "ready", "sources": []},
+                "artifacts": [],
+            },
+        )
+
+    return httpx.MockTransport(handler)
+
+
+def _all_roles_transport():
+    def handler(request):
+        if request.url.host == "runtime.test":
+            assert request.url.path == "/v1/service"
+            assert request.headers.get("Authorization") == "Bearer runtime-token"
+            return httpx.Response(
+                200,
+                json={
+                    **PROFILE_DISCOVERY,
+                    "devices": {
+                        "restart": {
+                            "method": "POST",
+                            "url_template": "/v1/devices/{noun}/restart",
+                            "allow_eviction_default": False,
+                        }
+                    },
+                },
+            )
+        if request.url.host == "profiles.test":
+            return httpx.Response(200, json=PROFILE_DISCOVERY)
         return httpx.Response(
             200,
             json={
@@ -449,6 +509,35 @@ async def test_both_roles_are_converged_under_one_revision(
     assert "profile-token" not in profile_text
     assert profile_document["configuration"]["token"].startswith("enc:")
     assert not bootstrap_state["profile_candidate"].exists()
+
+
+@pytest.mark.asyncio
+async def test_runtime_controller_joins_the_transaction_without_being_inferred(
+    bootstrap_state, monkeypatch
+):
+    _set_inputs(monkeypatch)
+    _set_profile_inputs(monkeypatch)
+    _set_runtime_inputs(monkeypatch)
+
+    result = await bootstrap_state["bootstrap"].apply_bootstrap(
+        transport=_all_roles_transport()
+    )
+
+    assert result["runtime_controller"] == {
+        "configured": True,
+        "credential_present": True,
+        "provider": "Managed runtime",
+        "verified": True,
+        "verified_at": result["runtime_controller"]["verified_at"],
+    }
+    assert result["runtime_controller"]["verified_at"]
+    persisted = bootstrap_state["runtime_config"].load_persisted_configuration()
+    assert persisted is not None
+    assert persisted.target == "deployment-noun"
+    assert persisted.revision == result["revision"]
+    assert "runtime-token" not in bootstrap_state["runtime_active"].read_text(
+        encoding="utf-8"
+    )
 
 
 @pytest.mark.asyncio

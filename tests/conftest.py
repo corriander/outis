@@ -92,6 +92,7 @@ def _isolate_managed_state(tmp_path):
     """
     import artifact_store.config as artifact_store_config
     import profile_service.config as profile_service_config
+    import runtime_controller.config as runtime_controller_config
     import src.managed_transaction as managed_transaction
 
     active = tmp_path / "managed_state"
@@ -108,6 +109,16 @@ def _isolate_managed_state(tmp_path):
             profile_service_config,
             "PROFILE_SERVICE_CANDIDATE_FILE",
             "profile_service.pending.json",
+        ),
+        (
+            runtime_controller_config,
+            "RUNTIME_CONTROLLER_CONFIG_FILE",
+            "runtime_controller.json",
+        ),
+        (
+            runtime_controller_config,
+            "RUNTIME_CONTROLLER_CANDIDATE_FILE",
+            "runtime_controller.pending.json",
         ),
         (managed_transaction, "MANAGED_BOOTSTRAP_FILE", "managed_bootstrap.json"),
         (managed_transaction, "ARTIFACT_STORE_CONFIG_FILE", "artifact_store.json"),

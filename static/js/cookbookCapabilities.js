@@ -9,7 +9,7 @@ const FALLBACK = Object.freeze({
     catalogue: { provider: 'huggingface', browse: true, inspect: true },
     artifact_store: { provider: null, list: false, acquire: false, delete: false },
     profile_service: { provider: null, read: false, write: false, external: false },
-    runtime_controller: { provider: null, status: false, start: false, stop: false, logs: false },
+    runtime_controller: { provider: null, status: false, start: false, stop: false, logs: false, apply_profiles: false },
   },
 });
 
@@ -35,6 +35,8 @@ export function cookbookUiPolicy(document) {
     profiles: profiles.write === true,
     profileEditor,
     profileProvider: profileEditor ? profileProvider : null,
+    profileApply: runtime.apply_profiles === true && runtime.provider !== 'odysseus-native',
+    runtimeProvider: runtime.apply_profiles === true ? (runtime.provider || null) : null,
     launch: runtime.start === true,
     nativeSettings: document?.mode === 'native',
   };

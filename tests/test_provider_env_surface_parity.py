@@ -40,6 +40,11 @@ PROVIDER_VARIABLES = (
     "OUTIS_PROFILE_SERVICE_NAME",
     "OUTIS_PROFILE_SERVICE_TOKEN",
     "OUTIS_PROFILE_SERVICE_TIMEOUT",
+    "OUTIS_RUNTIME_CONTROLLER_URL",
+    "OUTIS_RUNTIME_CONTROLLER_NAME",
+    "OUTIS_RUNTIME_CONTROLLER_TOKEN",
+    "OUTIS_RUNTIME_CONTROLLER_TARGET",
+    "OUTIS_RUNTIME_CONTROLLER_TIMEOUT",
 )
 
 
@@ -71,7 +76,11 @@ def test_every_provider_variable_reaches_every_compose_file(compose_file, variab
 
 @pytest.mark.parametrize(
     "variable",
-    ("OUTIS_ARTIFACT_STORE_TOKEN", "OUTIS_PROFILE_SERVICE_TOKEN"),
+    (
+        "OUTIS_ARTIFACT_STORE_TOKEN",
+        "OUTIS_PROFILE_SERVICE_TOKEN",
+        "OUTIS_RUNTIME_CONTROLLER_TOKEN",
+    ),
 )
 def test_provider_tokens_are_declared_sensitive_and_never_carry_a_value(variable):
     text = (ROOT / ".env.schema").read_text(encoding="utf-8")
