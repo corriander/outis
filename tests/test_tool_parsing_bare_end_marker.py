@@ -35,6 +35,7 @@ KEPT = [
     ("END", "END"),
     ("\nEnd\n", "End"),
     ("x assistant y", "x assistant y"),          # mid-sentence must survive (#5971)
+    ("awk '{c[$1]++} END {for (y in c) print y}'", "} END {"),  # awk END block
 ]
 
 # Real markers — at least one pipe, plus the role word — with the exact output
