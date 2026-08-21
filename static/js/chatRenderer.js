@@ -1796,7 +1796,11 @@ export function createUserMsgFooter(msgElement) {
     { id: 'copy', icon: COPY_ICON, title: 'Copy message', cls: 'footer-copy-btn', html: true, handler(e) {
       e.stopPropagation();
       const btn = e.currentTarget;
-      uiModule.copyToClipboard(msgElement.querySelector('.body')?.textContent || '');
+      // Same source as the assistant footer: the message's markdown, not the
+      // rendered DOM text. textContent has already lost every backtick, list
+      // marker and link, so copying your own message returned prose that no
+      // longer round-trips.
+      uiModule.copyToClipboard(copyMessageText(msgElement));
       btn.innerHTML = CHECK_ICON;
       setTimeout(() => { btn.innerHTML = COPY_ICON; }, 1500);
     }},
