@@ -10,6 +10,7 @@ import settingsModule from './settings.js';
 import spinnerModule from './spinner.js';
 import { bindMenuDismiss } from './escMenuStack.js';
 import { matchModelKey } from './model/matchKey.js';
+import { mapOutsideCode } from './markdown/outsideCode.js';
 
 const SEARCH_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>';
 const REPORT_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>';
@@ -921,9 +922,15 @@ export function stripToolBlocks(text) {
   cleaned = cleaned.replace(XML_TOOL_CALL_RE, '');
   cleaned = cleaned.replace(XML_INVOKE_RE, '');
   cleaned = cleaned.replace(RAW_OPENAI_TOOL_JSON_RE, '');
-  cleaned = cleaned.replace(QWEN_ROLE_MARKER_RE, '');
-  cleaned = cleaned.replace(QWEN_BARE_MARKER_RE, ' ');
-  cleaned = cleaned.replace(TOOL_NARRATION_RE, '');
+  // The patterns above are unambiguous machine syntax and are stripped
+  // wherever they appear. These three are word-shaped — a leaked role
+  // marker, a line of `stdout:` narration — and mean different things in
+  // prose and in code: inside a fence they are the log or the chat template
+  // the user asked to see, so code is left exactly as the model sent it.
+  cleaned = mapOutsideCode(cleaned, (chunk) => chunk
+    .replace(QWEN_ROLE_MARKER_RE, '')
+    .replace(QWEN_BARE_MARKER_RE, ' ')
+    .replace(TOOL_NARRATION_RE, ''));
   cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
   return cleaned.trim();
 }
