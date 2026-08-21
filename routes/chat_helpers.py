@@ -1048,6 +1048,13 @@ def _extract_thinking_meta(text: str) -> dict | None:
 def clean_thinking_for_save(content: str, metadata: dict | None = None) -> tuple[str, dict]:
     """Extract thinking from content into metadata. Use for save paths that bypass save_assistant_response."""
     md = dict(metadata) if metadata else {}
+    if md.get("stopped"):
+        # Cancelled mid-reasoning: close the block here, where we know why the
+        # generation ended, rather than leaving every reader downstream to
+        # guess from the text whether it was cut off or never closed.
+        from src.text_helpers import close_unclosed_think
+
+        content = close_unclosed_think(content)
     info = _extract_thinking_meta(content)
     if info:
         if info.get("thinking"):

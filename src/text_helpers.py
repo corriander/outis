@@ -143,6 +143,27 @@ def normalize_thinking_markup(text: str) -> str:
     return out
 
 
+def close_unclosed_think(text: str) -> str:
+    """Close a `<think>` block that the generation never got to close.
+
+    A cancelled or truncated turn leaves `<think>` with no `</think>`, and every
+    reader downstream then has to guess whether that is reasoning cut off or a
+    model that never closes its tags. The two want opposite handling and the text
+    cannot tell them apart — but the code that stops the stream knows. Closing the
+    tag there records the answer, so nothing later has to infer it.
+
+    No-op when the markup is already balanced.
+    """
+    if not text:
+        return text
+    normalized = normalize_thinking_markup(text)
+    opens = len(re.findall(r"<think(?:ing)?(?:s+[^>]*)?>", normalized, re.I))
+    closes = len(re.findall(r"</think(?:ing)?>", normalized, re.I))
+    if opens <= closes:
+        return text
+    return text + ("</think>" * (opens - closes))
+
+
 def strip_think(text: str, *, prose: bool = False, prompt_echo: bool = True) -> str:
     """Strip `<think>` blocks from model output.
 
