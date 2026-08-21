@@ -247,7 +247,13 @@ function normalizePlainThinking(text) {
 /**
  * Extract all complete thinking blocks and remaining content
  */
-export function extractThinkingBlocks(text) {
+export function extractThinkingBlocks(text, options = {}) {
+  // `complete: false` means the generation stopped early — the user cancelled,
+  // the stream dropped, the model hit its token limit. An unclosed <think> then
+  // means "reasoning cut off", not "this model never closes its tags", and the
+  // two want opposite handling. See the unclosed-tag branch below.
+  const { complete = true } = options;
+  let incompleteThinking = false;
   // Handle malformed patterns: <think></think>\n...actual thinking...\n</think>
   // Some models emit an empty <think></think> then put thinking text outside,
   // closed by a second orphaned </think>.
@@ -299,7 +305,23 @@ export function extractThinkingBlocks(text) {
       cleanContent = cleanContent.slice(0, gemmaThoughtStart);
     } else {
       const strayOpener = cleanContent.match(/^\s*<think(?:ing)?(?:\s+[^>]*)?>([\s\S]*)$/i);
-      if (strayOpener) {
+      if (!complete) {
+        // (c) Interrupted. Case (a) would hand the reasoning to the user as
+        // the reply — and since the bubble text is what gets stored and
+        // replayed, it would put the model's private reasoning back into
+        // context as something it said out loud. Case (b) would delete it.
+        // Keep it, marked as the unfinished thinking it is.
+        const partial = strayOpener
+          ? strayOpener[1]
+          : (cleanContent.match(/<think(?:ing)?(?:\s+[^>]*)?>([\s\S]*)$/i) || [])[1] || '';
+        if (partial.trim()) {
+          thinkingBlocks.push(partial.trim());
+          incompleteThinking = true;
+        }
+        cleanContent = strayOpener
+          ? ''
+          : cleanContent.replace(/<think(?:ing)?(?:\s+[^>]*)?>[\s\S]*$/gi, '');
+      } else if (strayOpener) {
         cleanContent = strayOpener[1];
       } else {
         cleanContent = cleanContent.replace(/<think(?:ing)?(?:\s+[^>]*)?>[\s\S]*$/gi, '');
@@ -326,20 +348,21 @@ export function extractThinkingBlocks(text) {
     thinkingBlocks: mergedBlocks,
     content: cleanContent.trim(),
     thinkingTime,
+    incompleteThinking,
   };
 }
 
 /**
  * Create a collapsible thinking section
  */
-function createThinkingSection(thinkingContent, index = 0, thinkingTime = null) {
+function createThinkingSection(thinkingContent, index = 0, thinkingTime = null, incomplete = false) {
   const id = `thinking-${Date.now()}-${index}`;
   const timeHtml = thinkingTime ? `<span style="font-size:11px;opacity:0.4;font-variant-numeric:tabular-nums;">${thinkingTime}s</span>` : '';
   return `
     <div class="thinking-section">
       <div class="thinking-header" data-thinking-id="${id}">
         <div class="thinking-header-left">
-          <span>View thinking process</span>
+          <span>${incomplete ? 'View thinking process (interrupted)' : 'View thinking process'}</span>
         </div>
         <div style="display:flex;align-items:center;gap:6px;">
           ${timeHtml}
@@ -457,8 +480,9 @@ export function createCollapsible(contentMarkdown, label = 'details') {
     </div>`;
 }
 
-export function processWithThinking(text) {
-  const { thinkingBlocks, content, thinkingTime } = extractThinkingBlocks(text);
+export function processWithThinking(text, options = {}) {
+  const { thinkingBlocks, content, thinkingTime, incompleteThinking } =
+    extractThinkingBlocks(text, options);
 
   let html = '';
   let visibleContent = content || '';
@@ -467,7 +491,7 @@ export function processWithThinking(text) {
 
   // Add thinking sections (collapsed by default)
   thinkingBlocks.forEach((block, index) => {
-    html += createThinkingSection(block, index, thinkingTime);
+    html += createThinkingSection(block, index, thinkingTime, incompleteThinking);
   });
 
   // Add the actual content
