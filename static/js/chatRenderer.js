@@ -936,12 +936,28 @@ export function stripToolBlocks(text) {
 }
 
 /**
+ * What every message bubble records in `dataset.raw`: the markdown behind
+ * what the bubble shows — tool-call markup removed, whitespace squashed — and
+ * not the wire text, despite the name. Copy, edit, resend, regenerate, variant
+ * capture and prompt recall all read that attribute, so every render path has
+ * to agree on what it holds. The cancel and multi-round paths used to store
+ * the unstripped stream, so the same reply copied differently before and after
+ * a refresh, and editing one showed the tool JSON.
+ *
+ * @param {string} textRaw
+ * @returns {string}
+ */
+export function displaySource(textRaw) {
+  return markdownModule.squashOutsideCode(stripToolBlocks(String(textRaw ?? '')));
+}
+
+/**
  * Plain-text payload for the message copy buttons: the reply as the renderer
- * displays it — tool blocks and <think> reasoning stripped. dataset.raw keeps
- * the full model output (chat.js even embeds the elapsed time into the
- * <think> tag for reload persistence), so copying it verbatim leaks the
- * thinking block (#3722). Falls back to the raw text when stripping leaves
- * nothing (e.g. turns interrupted mid-thinking).
+ * displays it — tool blocks and <think> reasoning stripped. dataset.raw still
+ * carries the <think> block (chat.js embeds the elapsed time in its tag for
+ * reload persistence), so copying it verbatim leaks the thinking (#3722).
+ * Falls back to the raw text when stripping leaves nothing (e.g. turns
+ * interrupted mid-thinking).
  */
 export function copyMessageText(msgElement) {
   const raw = msgElement.dataset.raw || msgElement.querySelector('.body')?.textContent || '';
@@ -2330,7 +2346,7 @@ export function addMessage(role, content, modelName, metadata) {
 
       for (let r = 0; r < maxRound; r++) {
         const roundNum = r + 1;
-        const txt = resolveDocumentPlaceholderLinks((roundTexts[r] || '').trim(), metadata);
+        const txt = resolveDocumentPlaceholderLinks(displaySource(roundTexts[r]), metadata);
 
         if (txt) {
           const wrap = document.createElement('div');
@@ -2517,7 +2533,7 @@ export function addMessage(role, content, modelName, metadata) {
     const b = document.createElement('div');
     b.className = 'body';
 
-    let text = markdownModule.squashOutsideCode(stripToolBlocks(textRaw || ''));
+    let text = displaySource(textRaw);
     if (role === 'assistant') {
       text = resolveDocumentPlaceholderLinks(text, metadata);
     }
@@ -2794,6 +2810,7 @@ const chatRenderer = {
   updateSessionCostUI,
   roleTimestamp,
   stripToolBlocks,
+  displaySource,
   copyMessageText,
   safeToolScreenshotSrc,
   safeDisplayImageSrc,

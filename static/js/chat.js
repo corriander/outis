@@ -1067,15 +1067,16 @@ import { wireArrowUpRecall, getUserMessagesFromChatHistory } from './composerArr
       }
       // Render whatever was accumulated so far
       if (currentHolder && currentAccumulated) {
-        // Store accumulated in a closure variable before it gets cleared
-        const stoppedContent = currentAccumulated;
-        
-        // Store raw content in dataset for consistency with other messages
+        // Store accumulated in a closure variable before it gets cleared.
+        // Through displaySource so a cancelled reply reads, copies and edits
+        // exactly like one that finished — it used to keep the unstripped
+        // stream, tool markup and all.
+        const stoppedContent = chatRenderer.displaySource(currentAccumulated);
+
         currentHolder.dataset.raw = stoppedContent;
-        
-        currentHolder.querySelector('.body').innerHTML = markdownModule.processWithThinking(
-          markdownModule.squashOutsideCode(stoppedContent)
-        );
+
+        currentHolder.querySelector('.body').innerHTML =
+          markdownModule.processWithThinking(stoppedContent);
         
         // Highlight code blocks
         if (window.hljs) {
