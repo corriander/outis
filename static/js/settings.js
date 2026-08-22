@@ -9,6 +9,8 @@ import { sortModelIds } from './modelSort.js';
 import { providerLogo } from './providers.js';
 import { isAltGrEvent } from './platform.js';
 import { bindMenuDismiss } from './escMenuStack.js';
+import Storage from './storage.js';
+import { DEFAULT_RECALL_KEY_MODE, normalizeRecallKeyMode } from './composerArrowUpRecall.js';
 
 let initialized = false;
 let modalEl = null;
@@ -1934,6 +1936,24 @@ function _comboFromEvent(e) {
   return parts.join('+');
 }
 
+/**
+ * Which keys recall an earlier prompt into the composer. Device-local (like
+ * density and sidebar width) rather than part of the server-side keybind map:
+ * it is an input habit, not an account setting.
+ */
+function initPromptRecallKeys() {
+  const sel = el('set-prompt-recall-keys');
+  if (!sel) return;
+  sel.value = normalizeRecallKeyMode(
+    Storage.get(Storage.KEYS.PROMPT_RECALL_KEYS, DEFAULT_RECALL_KEY_MODE)
+  );
+  sel.addEventListener('change', () => {
+    const mode = normalizeRecallKeyMode(sel.value);
+    sel.value = mode;
+    Storage.set(Storage.KEYS.PROMPT_RECALL_KEYS, mode);
+  });
+}
+
 async function initShortcuts() {
   const listEl = el('shortcuts-list');
   const resetBtn = el('shortcuts-reset-btn');
@@ -2337,6 +2357,7 @@ function initAll() {
   initAgentSettings();
   initAppearance();
   initShortcuts();
+  initPromptRecallKeys();
   initAccount();
   initIntegrations();
   initEmailSettings();
