@@ -69,16 +69,75 @@ def test_thinking_only_partial_survives_the_save_path():
     assert thinking in content
     assert md["stopped"] is True
 
+# -- where reasoning goes depends on how far the turn got ---------------------
 
-def test_cancel_handler_falls_back_to_the_thinking_accumulator():
-    """Source-level guard: the route is a generator inside a closure and cannot
-    be exercised directly, so pin the fallback that makes the above reachable."""
+
+def test_reasoning_cut_off_midway_rides_in_the_content():
+    """Stopped while still thinking: no reply exists, so the block is the message."""
+    from routes.chat_helpers import stopped_partial_for_save
+
+    content, md = stopped_partial_for_save("", "Let me work through the halfer case", {})
+
+    assert content.startswith("<think>")
+    assert content.endswith("</think>")
+    assert md["thinking_incomplete"] is True
+    # The content carries the block here, so metadata must not carry it too --
+    # the renderer prepends metadata.thinking and would draw two sections.
+    assert "thinking" not in md
+
+
+def test_completed_reasoning_survives_a_reply_cut_off_midway():
+    """Stopped after thinking finished: the case that used to lose it entirely.
+
+    Reasoning arrives on its own channel and never enters `full_response`, so
+    this save kept the partial reply and dropped the reasoning on the floor.
+    The thinking block was on screen while the stream ran and gone after a
+    reload, while the same model's uninterrupted replies kept theirs.
+    """
+    from routes.chat_helpers import stopped_partial_for_save
+
+    content, md = stopped_partial_for_save(
+        "Little's Law relates the average", "Work through the queue case first", {}
+    )
+
+    assert content == "Little's Law relates the average"
+    assert md["thinking"] == "Work through the queue case first"
+    assert md["stopped"] is True
+    # The reasoning completed. Only the reply was interrupted, so labelling the
+    # thinking block "(interrupted)" would be a lie.
+    assert "thinking_incomplete" not in md
+
+
+def test_inline_reasoning_is_left_to_the_ordinary_extraction():
+    """Models that emit <think> inside the reply need no special handling."""
+    from routes.chat_helpers import stopped_partial_for_save
+
+    content, md = stopped_partial_for_save("<think>done</think>Here you go.", "", {})
+
+    assert content == "Here you go."
+    assert md["thinking"] == "done"
+
+
+def test_a_turn_that_generated_nothing_saves_nothing():
+    from routes.chat_helpers import stopped_partial_for_save
+
+    content, _ = stopped_partial_for_save("", "", {})
+
+    assert not content
+
+
+def test_both_cancel_handlers_route_through_the_helper():
+    """Source-level guard: the routes are generators inside a closure and cannot
+    be exercised directly.
+
+    Agent mode is the reason this counts both. The fix originally landed on the
+    chat-mode handler alone, so an agent turn stopped mid-thought still saved
+    nothing and vanished on reload.
+    """
     from pathlib import Path
 
     src = Path(__file__).resolve().parent.parent / "routes" / "chat_routes.py"
     body = src.read_text(encoding="utf-8")
-    assert 'if not _partial.strip() and thinking_response.strip():' in body
-    assert '_partial = "<think>" + thinking_response' in body
-    assert '"thinking_incomplete": True,' in body
-    # The old guard dropped a thinking-only turn on the floor.
-    assert "if full_response and not incognito:\n                        logger.info(\"Client disconnected mid-stream (chat mode)" not in body
+    assert body.count("stopped_partial_for_save(") == 2
+    # Neither handler may go back to saving full_response unconditionally.
+    assert "if full_response and not incognito:" not in body
