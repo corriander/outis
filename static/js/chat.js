@@ -22,7 +22,11 @@ import codeRunnerModule from './codeRunner.js';
 import slashCommands, { initSlashCommands, isCommand, handleSlashCommand, handleSetupInput, handleSetupWizard, typewriterInto } from './slashCommands.js?v=20260722emailfastindex1';
 import createResearchSynapse from './researchSynapse.js';
 import { createStreamRenderer } from './streamingRenderer.js';
-import { wireArrowUpRecall, getUserMessagesFromChatHistory } from './composerArrowUpRecall.js?v=20260714promptrecall';
+import {
+  wireArrowUpRecall,
+  getUserMessagesFromChatHistory,
+  DEFAULT_RECALL_KEY_MODE,
+} from './composerArrowUpRecall.js?v=20260821promptrecallkeys';
 
   const RESEARCH_TIMEOUT_MS = 360000;
   const DEFAULT_TIMEOUT_MS = 120000;
@@ -704,6 +708,8 @@ import { wireArrowUpRecall, getUserMessagesFromChatHistory } from './composerArr
     const _wireArrowUpRecall = (composer) =>
       wireArrowUpRecall(composer, () => getUserMessagesFromChatHistory(), {
         autoResize: uiModule?.autoResize,
+        // Read per keystroke so a change in Settings applies without a reload.
+        keys: () => Storage.get(Storage.KEYS.PROMPT_RECALL_KEYS, DEFAULT_RECALL_KEY_MODE),
       });
 
     const composer = document.getElementById('message');

@@ -68,6 +68,7 @@ function runCase(body) {
   let resized = false;
   wireArrowUpRecall(composer, () => last, {
     autoResize: () => { resized = true; },
+    keys: body.keys,
   });
   const events = body.events ?? [body.event ?? {}];
   const handled = events.map(ev => composer.dispatchKey(ev));
@@ -306,3 +307,95 @@ def test_integration_recalls_from_chat_history_dom():
     )
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout.strip()) == {"value": "stored prompt", "prevented": True}
+
+
+def test_prompt_recall_is_not_duplicated_in_app_js():
+    """Only composerArrowUpRecall.js may own ArrowUp on #message (issue #5862).
+
+    static/app.js once carried a near-verbatim copy of this recall logic, wired
+    as a second capture-phase listener on the same textarea. That copy lacked
+    the draft guard here, and because it called stopImmediatePropagation it won
+    regardless of registration order — so a typed multi-line prompt was replaced
+    by the last sent one instead of the caret moving up a line.
+    """
+    app_js = (_REPO / "static" / "app.js").read_text(encoding="utf-8")
+    for marker in (
+        "_odysseusPromptRecallCapture",
+        "_readComposerPromptHistory",
+        "odysseusRecallIndex",
+    ):
+        assert marker not in app_js, (
+            f"static/app.js reintroduces prompt recall ({marker!r}); "
+            "it belongs to static/js/composerArrowUpRecall.js alone"
+        )
+
+
+# ── Recall key preference (arrows / Ctrl+P,N / both) ──────────────────────────
+
+
+@pytest.mark.skipif(not _HAS_NODE, reason="node binary not on PATH")
+def test_ctrl_p_recalls_in_ctrl_mode():
+    out = _run([{"initial": "", "last": "hello again", "keys": "ctrl",
+                 "event": {"key": "p", "ctrlKey": True}}])[0]
+    assert out["value"] == "hello again"
+    assert out["prevented"] == [True]
+
+
+@pytest.mark.skipif(not _HAS_NODE, reason="node binary not on PATH")
+def test_ctrl_mode_leaves_the_arrows_to_the_caret():
+    """The point of choosing Ctrl+P/N: ArrowUp goes back to moving the caret."""
+    out = _run([{"initial": "", "last": "hello again", "keys": "ctrl",
+                 "event": {"key": "ArrowUp"}}])[0]
+    assert out["value"] == ""
+    assert out["prevented"] == [False]
+
+
+@pytest.mark.skipif(not _HAS_NODE, reason="node binary not on PATH")
+def test_both_mode_accepts_either_key():
+    arrows, ctrl = _run([
+        {"initial": "", "last": "hello again", "keys": "both", "event": {"key": "ArrowUp"}},
+        {"initial": "", "last": "hello again", "keys": "both",
+         "event": {"key": "p", "ctrlKey": True}},
+    ])
+    assert arrows["value"] == "hello again"
+    assert ctrl["value"] == "hello again"
+
+
+@pytest.mark.skipif(not _HAS_NODE, reason="node binary not on PATH")
+def test_ctrl_p_over_a_draft_stashes_it_and_ctrl_n_hands_it_back():
+    """Ctrl+P is unambiguous, so it may recall over a draft — but not lose it."""
+    out = _run([{
+        "initial": "half-written thought",
+        "last": "previous message",
+        "keys": "both",
+        "events": [{"key": "p", "ctrlKey": True}, {"key": "n", "ctrlKey": True}],
+    }])[0]
+    assert out["value"] == "half-written thought"
+    assert out["selectionStart"] == len("half-written thought")
+
+
+@pytest.mark.skipif(not _HAS_NODE, reason="node binary not on PATH")
+def test_arrow_up_still_declines_a_draft_when_both_are_enabled():
+    out = _run([{"initial": "half-written thought", "last": "previous message",
+                 "keys": "both", "event": {"key": "ArrowUp"}}])[0]
+    assert out["value"] == "half-written thought"
+    assert out["prevented"] == [False]
+
+
+def test_recall_key_preference_is_wired_end_to_end():
+    """The module reads the mode from the composer's caller, which reads the
+    stored preference the Settings > Shortcuts picker writes."""
+    chat_js = (_REPO / "static" / "js" / "chat.js").read_text(encoding="utf-8")
+    assert "keys: () => Storage.get(Storage.KEYS.PROMPT_RECALL_KEYS" in chat_js
+
+    storage_js = (_REPO / "static" / "js" / "storage.js").read_text(encoding="utf-8")
+    assert "PROMPT_RECALL_KEYS:" in storage_js
+
+    settings_js = (_REPO / "static" / "js" / "settings.js").read_text(encoding="utf-8")
+    assert "initPromptRecallKeys" in settings_js
+    assert "Storage.set(Storage.KEYS.PROMPT_RECALL_KEYS" in settings_js
+
+    index_html = (_REPO / "static" / "index.html").read_text(encoding="utf-8")
+    assert 'id="set-prompt-recall-keys"' in index_html
+    for mode in ("arrows", "ctrl", "both"):
+        assert f'value="{mode}"' in index_html
