@@ -1048,6 +1048,13 @@ def _extract_thinking_meta(text: str) -> dict | None:
 def clean_thinking_for_save(content: str, metadata: dict | None = None) -> tuple[str, dict]:
     """Extract thinking from content into metadata. Use for save paths that bypass save_assistant_response."""
     md = dict(metadata) if metadata else {}
+    if md.get("stopped"):
+        # Cancelled mid-reasoning: close the block here, where we know why the
+        # generation ended, rather than leaving every reader downstream to
+        # guess from the text whether it was cut off or never closed.
+        from src.text_helpers import close_unclosed_think
+
+        content = close_unclosed_think(content)
     info = _extract_thinking_meta(content)
     if info:
         if info.get("thinking"):
@@ -1056,6 +1063,39 @@ def clean_thinking_for_save(content: str, metadata: dict | None = None) -> tuple
             md["thinking_time"] = info["time"]
         return info["reply"], md
     return content, md
+
+
+def stopped_partial_for_save(
+    full_response: str,
+    thinking_response: str,
+    metadata: dict | None = None,
+) -> tuple[str, dict]:
+    """Build the content and metadata for a turn cancelled mid-stream.
+
+    Reasoning can arrive on its own channel rather than inside the reply, so a
+    cancelled turn has to place it deliberately:
+
+    - stopped while still thinking, there is no reply yet, so the reasoning
+      becomes the content as an unfinished block and ``thinking_incomplete``
+      tells the renderer to label it as cut off;
+    - stopped after the reasoning finished, the partial reply is the content
+      and the completed reasoning goes to ``thinking`` metadata, which is where
+      an ordinary save puts it. Without this the reasoning was dropped and the
+      thinking block vanished on reload while the reply survived.
+
+    Reasoning already inline in ``full_response`` is left alone, for
+    ``clean_thinking_for_save`` to extract as it does on any other path.
+    """
+    md = dict(metadata) if metadata else {}
+    md["stopped"] = True
+    partial = full_response or ""
+    thinking = (thinking_response or "").strip()
+    if not partial.strip() and thinking:
+        partial = "<think>" + thinking
+        md["thinking_incomplete"] = True
+    elif thinking and "<think" not in partial.lower():
+        md["thinking"] = thinking
+    return clean_thinking_for_save(partial, md)
 
 
 def save_assistant_response(
