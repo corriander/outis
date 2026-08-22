@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.1](https://github.com/corriander/outis/compare/outis-v0.3.0...outis-v0.3.1) (2026-08-22)
+
+
+### Bug Fixes
+
+* **chat:** bare marker strip eats code ([#16](https://github.com/corriander/outis/issues/16)) ([4bbd9e6](https://github.com/corriander/outis/commit/4bbd9e63050eadd7afefbc9532b0fddb33354280))
+* **chat:** composer arrowup draft loss ([#17](https://github.com/corriander/outis/issues/17)) ([86d4950](https://github.com/corriander/outis/commit/86d4950fda4c1830bcbc127be68a150334d2cdfb))
+* **chat:** keep display-time scrubbing out of code blocks ([#19](https://github.com/corriander/outis/issues/19)) ([cabd035](https://github.com/corriander/outis/commit/cabd0351f783bcea8874aae10404e54e6a2bb5f9))
+* **chat:** keep interrupted reasoning as reasoning ([#20](https://github.com/corriander/outis/issues/20)) ([37f859d](https://github.com/corriander/outis/commit/37f859d4287883a92cb1a067e9a299a54f019421))
+* **chat:** stop a late delta redrawing a cancelled turn ([cea95ae](https://github.com/corriander/outis/commit/cea95aeaded8bccb3701585c2ad5378899d15373))
+* **chat:** stop message text from promoting chat mode to agent with bash ([36cc688](https://github.com/corriander/outis/commit/36cc68845efa2d1c9ea137bad4ea158d799f6452))
+
 ## [0.3.0](https://github.com/corriander/outis/compare/outis-v0.2.0...outis-v0.3.0) (2026-08-15)
 
 
