@@ -21,6 +21,7 @@ from src.tool_policy import (
 )
 
 _CHAT_ROUTES = Path(__file__).resolve().parent.parent / "routes" / "chat_routes.py"
+_CHAT_JS = Path(__file__).resolve().parent.parent / "static" / "js" / "chat.js"
 
 
 # ── Source-level guards ─────────────────────────────────────────
@@ -119,12 +120,37 @@ def test_disabled_tools_respects_missing_vs_explicit_toggles():
     )
 
 
-def test_workspace_auto_escalation_keeps_shell_tools():
-    """Workspace/shell auto-routing must not use the light typed-tool clamp."""
+def test_shell_and_workspace_intent_do_not_promote_chat_to_agent():
+    """Reverses the old workspace auto-routing: prompt text is not consent.
+
+    Shell/workspace intent used to promote a chat turn to agent mode *and* set
+    allow_bash="true", so a message containing an everyday word like "test",
+    "file" or "terminal" handed the model a shell the user had not switched on.
+    Those categories no longer promote at all, and every remaining
+    auto-escalation gets the light clamp.
+    """
     source = _CHAT_ROUTES.read_text(encoding="utf-8")
-    assert '_workspace_agent_intent = _tool_intent.category in {"shell", "workspace"}' in source
-    assert "allow_bash = \"true\"" in source
-    assert "if auto_escalated and not _workspace_agent_intent:" in source
+    assert '_NON_PROMOTING_INTENT_CATEGORIES = {"shell", "workspace"}' in source
+    assert "_tool_intent.category not in _NON_PROMOTING_INTENT_CATEGORIES" in source
+    assert "if auto_escalated:" in source, "the light clamp must cover every auto-escalated turn"
+    assert "_workspace_agent_intent" not in source, (
+        "the workspace carve-out around the light clamp must be gone"
+    )
+    assert 'allow_bash = "true"' not in source, (
+        "no code path may turn the shell on from message text"
+    )
+
+
+def test_frontend_does_not_promote_chat_to_agent_from_message_text():
+    """The same reversal on the client, which the server clamp cannot see.
+
+    static/js/chat.js sent mode=agent plus allow_bash=true when the message
+    matched a keyword list, and the backend reads that as the user having
+    chosen agent mode — so it bypassed the clamp entirely.
+    """
+    source = _CHAT_JS.read_text(encoding="utf-8")
+    assert "workspaceAgentIntent" not in source
+    assert "fd.set('allow_bash', 'true')" not in source
 
 
 # ── Functional tests of the disabled-tools logic ───────────────
@@ -323,7 +349,6 @@ def test_explicit_false_disables_even_for_admin():
 
 # ── Frontend source-level guards ──────────────────────────────
 
-_CHAT_JS = Path(__file__).resolve().parent.parent / "static" / "js" / "chat.js"
 
 
 def test_frontend_always_sends_explicit_allow_bash():

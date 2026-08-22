@@ -126,6 +126,12 @@ _RECENT_BROWSER_CONTEXT_RE = re.compile(
     r"form\s+submission|playwright|automation)\b",
     re.I,
 )
+# Intent categories that never promote a chat turn to agent mode. They are only
+# useful with the shell and file tools, and chat mode does not grant those: a
+# message that mentions the terminal is not a request to use one. Picking agent
+# mode is how you ask for them.
+_NON_PROMOTING_INTENT_CATEGORIES = {"shell", "workspace"}
+
 _BROWSER_MCP_TOOLS = {
     "mcp__builtin_browser__browser_navigate",
     "mcp__builtin_browser__browser_snapshot",
@@ -776,21 +782,29 @@ def setup_chat_routes(
         # Intent auto-escalation: if the user is clearly asking the assistant
         # to create a todo, reminder, or calendar event, promote chat → agent
         # for this turn so the LLM has access to manage_notes / manage_calendar.
-        # This is a LIGHT promotion — see the disabled_tools block below, which
-        # withholds shell/code/file tools so the model doesn't try to `bash`
-        # its way through a plain chat request (and fail, especially with the
-        # shell disabled).
+        # Every promotion is LIGHT — see the disabled_tools block below, which
+        # withholds shell/code/file tools from a turn the user did not put in
+        # agent mode themselves. Shell and workspace intent does not promote at
+        # all (_NON_PROMOTING_INTENT_CATEGORIES): without those tools there is
+        # nothing to promote it for.
         auto_escalated = False
         _tool_intent = _classify_tool_intent(message) if isinstance(message, str) else None
-        _workspace_agent_intent = False
-        if chat_mode == "chat" and _tool_intent and _tool_intent.needs_tools:
+        _intent_promotes = bool(
+            _tool_intent
+            and _tool_intent.needs_tools
+            and _tool_intent.category not in _NON_PROMOTING_INTENT_CATEGORIES
+        )
+        if chat_mode == "chat" and _intent_promotes:
             chat_mode = "agent"
             auto_escalated = True
-            _workspace_agent_intent = _tool_intent.category in {"shell", "workspace"}
-            if _workspace_agent_intent:
-                allow_bash = "true"
             logger.info(
                 "chat→agent auto-escalation: category=%s reason=%s",
+                _tool_intent.category,
+                _tool_intent.reason,
+            )
+        elif chat_mode == "chat" and _tool_intent and _tool_intent.needs_tools:
+            logger.info(
+                "chat→agent auto-escalation declined: category=%s reason=%s",
                 _tool_intent.category,
                 _tool_intent.reason,
             )
@@ -904,7 +918,6 @@ def setup_chat_routes(
                 _tool_intent = ToolIntent(True, "web", "contextual web lookup follow-up")
                 chat_mode = "agent"
                 auto_escalated = True
-                _workspace_agent_intent = False
                 logger.info(
                     "chat→agent auto-escalation: category=%s reason=%s",
                     _tool_intent.category,
@@ -915,17 +928,15 @@ def setup_chat_routes(
                 if chat_mode == "chat":
                     chat_mode = "agent"
                     auto_escalated = True
-                    _workspace_agent_intent = False
                     logger.info("chat→agent auto-escalation: contextual browser/form follow-up")
             if not workspace and isinstance(message, str):
                 _auto_workspace, _ = _resolve_workspace_from_message_path(request, message)
                 if _auto_workspace:
+                    # Name the workspace the path belongs to, but leave the mode
+                    # and the bash toggle alone: typing a path is not consent to
+                    # run commands in it.
                     workspace = _auto_workspace
-                    chat_mode = "agent"
-                    auto_escalated = True
-                    _workspace_agent_intent = True
-                    allow_bash = "true"
-                    logger.info("chat→agent auto-escalation: explicit path workspace=%s", workspace)
+                    logger.info("workspace resolved from message path: %s", workspace)
         except SessionNotFoundError as e:
             raise HTTPException(404, str(e))
         except (ValueError, ValidationError):
@@ -1173,12 +1184,11 @@ def setup_chat_routes(
         if _global_disabled and isinstance(_global_disabled, list):
             disabled_tools.update(_global_disabled)
 
-        # Light auto-escalation: the user is in chat mode and just expressed a
-        # notes/calendar/email intent. Grant the relevant managers but withhold
-        # the heavy "do things on the computer" tools — otherwise the model
-        # tries to shell out for a request that never needed it, then fails
-        # (and looks broken when the shell is disabled).
-        if auto_escalated and not _workspace_agent_intent:
+        # Auto-escalation is always light: the user is in chat mode and just
+        # expressed a notes/calendar/email intent. Grant the relevant managers
+        # but withhold the heavy "do things on the computer" tools — the user
+        # never asked for agent mode, and a prompt is not a permission grant.
+        if auto_escalated:
             disabled_tools.update({
                 "bash", "python", "read_file", "write_file",
             })

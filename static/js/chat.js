@@ -1666,11 +1666,11 @@ import { wireArrowUpRecall, getUserMessagesFromChatHistory } from './composerArr
 	      const isPlanMode = !!toggleState.plan_mode && !(el('research-toggle') && el('research-toggle').checked);
 	      let isAgentMode = (toggleState.mode || 'chat') === 'agent';
       const isIncognito = isIncognitoForSend;
-	      const workspaceAgentIntent = !isIncognito && /\b(fix|debug|implement|change|update|refactor|patch|review|test|run|execute|start|launch|build|lint|typecheck|benchmark|eval|terminal[- ]bench|tbench|repo|repository|codebase|project|app|server|api|frontend|backend|bug|issue|pr|file|folder|directory|source|logs?|trace|stacktrace|traceback|docker|container|tmux|terminal|shell|git|branch|commit|diff|pytest|process|port|endpoint|computer|machine|laptop|device|system)\b/i.test(String(msg || ''));
+	      // Chat mode stays chat mode. Words like "test", "file" or "terminal"
+	      // in the message used to promote the turn to agent and force the shell
+	      // on, so a plain question could hand the model a shell it was never
+	      // offered. The mode switch is how you ask for tools.
 	      if (isPlanMode || _pendingApprovedPlan) {
-	        isAgentMode = true;
-	      }
-	      if (!isAgentMode && workspaceAgentIntent) {
 	        isAgentMode = true;
 	      }
 	      // Auto-escalate to agent mode when a document is open — the user expects
@@ -1699,7 +1699,6 @@ import { wireArrowUpRecall, getUserMessagesFromChatHistory } from './composerArr
 	        fd.set('plan_mode', 'false');
 	      }
       fd.append('allow_bash', el('bash-toggle').checked ? 'true' : 'false');
-      if (workspaceAgentIntent) fd.set('allow_bash', 'true');
       const ragChk = el('rag-toggle');
       if (ragChk && !ragChk.checked) {
         fd.append('use_rag', 'false');
@@ -1721,7 +1720,7 @@ import { wireArrowUpRecall, getUserMessagesFromChatHistory } from './composerArr
       currentAbort = abortCtrl;
 
 	      const _tState = Storage.loadToggleState();
-	      const _isAgent = (_tState.mode || 'chat') === 'agent' || !!_tState.plan_mode || workspaceAgentIntent;
+	      const _isAgent = (_tState.mode || 'chat') === 'agent' || !!_tState.plan_mode;
 
       // Timeout: 6 min for research and agent mode, 3 min otherwise
       const timeoutMs = el('research-toggle').checked || _isAgent ? RESEARCH_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
