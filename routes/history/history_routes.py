@@ -100,6 +100,25 @@ def _merge_continue_rows_to_delete(db_messages, db1, db2):
     return to_delete
 
 
+def last_assistant_belongs_to_current_turn(history) -> bool:
+    """True when the newest assistant message is the reply that was interrupted.
+
+    Walking back from the end: an assistant message means the turn produced a
+    reply, and that reply is the one to mark. A user message first means it did
+    not — the model was stopped before it emitted anything the server kept — so
+    the newest assistant message belongs to an earlier, completed turn.
+
+    Marking that one puts "[Message interrupted]" and a Continue affordance on a
+    reply that was never cut off, and offers to resume a message that finished.
+    """
+    for msg in reversed(history or []):
+        role = msg.role if isinstance(msg, ChatMessage) else (msg or {}).get("role")
+        if role == "assistant":
+            return True
+        if role == "user":
+            return False
+    return False
+
 def setup_history_routes(session_manager, upload_handler=None) -> APIRouter:
     router = APIRouter(tags=["history"])
 
@@ -448,6 +467,10 @@ def setup_history_routes(session_manager, upload_handler=None) -> APIRouter:
         _verify_session_owner(request, session_id)
         try:
             session = session_manager.get_session(session_id)
+            if not last_assistant_belongs_to_current_turn(session.history):
+                # Stopped before the turn produced anything savable. There is
+                # nothing of this turn to mark, and the previous reply is not ours.
+                return {"status": "skipped", "reason": "no assistant message for this turn"}
             # Find last assistant message and add stopped metadata
             for msg in reversed(session.history):
                 if (isinstance(msg, ChatMessage) and msg.role == 'assistant') or \
