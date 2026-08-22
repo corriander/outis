@@ -483,6 +483,10 @@ export function createCollapsible(contentMarkdown, label = 'details') {
 export function processWithThinking(text, options = {}) {
   const { thinkingBlocks, content, thinkingTime, incompleteThinking } =
     extractThinkingBlocks(text, options);
+  // A stopped turn is saved with its markup balanced, so the text alone can no
+  // longer show that the reasoning was cut off — the caller carries that fact
+  // from the record instead.
+  const wasInterrupted = incompleteThinking || options.incomplete === true;
 
   let html = '';
   let visibleContent = content || '';
@@ -491,7 +495,7 @@ export function processWithThinking(text, options = {}) {
 
   // Add thinking sections (collapsed by default)
   thinkingBlocks.forEach((block, index) => {
-    html += createThinkingSection(block, index, thinkingTime, incompleteThinking);
+    html += createThinkingSection(block, index, thinkingTime, wasInterrupted);
   });
 
   // Add the actual content

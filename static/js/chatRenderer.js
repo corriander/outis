@@ -2595,7 +2595,10 @@ export function addMessage(role, content, modelName, metadata) {
 	      // <think> is reasoning that was cut off rather than a model that
 	      // never closes its tags.
 	      b.innerHTML = sourcesPrefix
-	        + markdownModule.processWithThinking(text, { complete: !metadata?.stopped })
+	        + markdownModule.processWithThinking(text, {
+	            complete: !metadata?.stopped,
+	            incomplete: !!metadata?.thinking_incomplete,
+	          })
 	        + findingsSuffix;
 	    }
 	    b.dataset.raw = text;

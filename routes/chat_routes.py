@@ -1644,12 +1644,24 @@ def setup_chat_routes(
                             _stream_set(session, status="done")
                             yield chunk
                 except (asyncio.CancelledError, GeneratorExit):
-                    if full_response and not incognito:
-                        logger.info("Client disconnected mid-stream (chat mode) for session %s, saving partial (%d chars)", session, len(full_response))
+                    # Reasoning arrives on its own channel and is deliberately kept
+                    # out of the saved reply. Cancel a turn while the model is still
+                    # thinking and full_response is therefore empty — so the partial
+                    # was dropped entirely, and the whole turn vanished on reload.
+                    # Keep it as an unfinished think block; the save path below
+                    # balances the markup and the renderer knows how to show it.
+                    _partial = full_response
+                    _thinking_only = False
+                    if not _partial.strip() and thinking_response.strip():
+                        _partial = "<think>" + thinking_response
+                        _thinking_only = True
+                    if _partial and not incognito:
+                        logger.info("Client disconnected mid-stream (chat mode) for session %s, saving partial (%d chars, thinking-only=%s)", session, len(_partial), _thinking_only)
                         _stopped_content, _stopped_md = clean_thinking_for_save(
-                            full_response,
+                            _partial,
                             {
                                 "stopped": True,
+                                "thinking_incomplete": True,
                                 "model": _actual_model or _answered_by or _requested_model,
                                 "requested_model": _requested_model,
                             },

@@ -45,3 +45,40 @@ def test_an_ordinary_save_does_not_close_anything():
 
     content, _ = clean_thinking_for_save("<think>still going", {})
     assert content == "<think>still going"
+
+
+# ── a turn stopped while still thinking must still be saved ───────────────────
+
+
+def test_thinking_only_partial_survives_the_save_path():
+    """The shape a reasoning model produces when stopped mid-thought.
+
+    Reasoning arrives on its own channel and is deliberately kept out of the
+    saved reply, so a turn cancelled before any reply text has an empty
+    `full_response`. The cancel handler used to save only when that was
+    non-empty, so the entire turn vanished on reload. It now falls back to the
+    thinking accumulator, wrapped as an unfinished block.
+    """
+    from routes.chat_helpers import clean_thinking_for_save
+
+    thinking = "Let me work through the halfer case first. Wait — that assumes"
+    content, md = clean_thinking_for_save("<think>" + thinking, {"stopped": True})
+
+    assert content.startswith("<think>")
+    assert content.endswith("</think>")
+    assert thinking in content
+    assert md["stopped"] is True
+
+
+def test_cancel_handler_falls_back_to_the_thinking_accumulator():
+    """Source-level guard: the route is a generator inside a closure and cannot
+    be exercised directly, so pin the fallback that makes the above reachable."""
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parent.parent / "routes" / "chat_routes.py"
+    body = src.read_text(encoding="utf-8")
+    assert 'if not _partial.strip() and thinking_response.strip():' in body
+    assert '_partial = "<think>" + thinking_response' in body
+    assert '"thinking_incomplete": True,' in body
+    # The old guard dropped a thinking-only turn on the floor.
+    assert "if full_response and not incognito:\n                        logger.info(\"Client disconnected mid-stream (chat mode)" not in body
