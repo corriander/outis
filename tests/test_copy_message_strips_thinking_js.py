@@ -171,7 +171,9 @@ def test_copy_message_text_mirrors_display_pipeline():
 
 
 def test_copy_handlers_route_through_copy_message_text():
-    for path, count in (("static/js/chatRenderer.js", 1), ("static/js/slashCommands.js", 1)):
+    # chatRenderer.js has two: the assistant footer and the user footer, which
+    # was left reading rendered DOM text when copyMessageText was introduced.
+    for path, count in (("static/js/chatRenderer.js", 2), ("static/js/slashCommands.js", 1)):
         text = (_REPO / path).read_text(encoding="utf-8")
         assert text.count("copyToClipboard(copyMessageText(") + text.count(
             "copyToClipboard(chatRenderer.copyMessageText("
@@ -179,3 +181,5 @@ def test_copy_handlers_route_through_copy_message_text():
         # The old behavior passed dataset.raw straight to the clipboard.
         assert "copyToClipboard(msgElement.dataset.raw" not in text, path
         assert "copyToClipboard(msgEl.dataset.raw" not in text, path
+        # The user footer copied the rendered body, losing all markdown.
+        assert "copyToClipboard(msgElement.querySelector(" not in text, path
