@@ -19,6 +19,8 @@ venv/
 !.env.schema
 # Local uv lockfile (optional, per-platform — see "Faster installs with uv" in README)
 requirements.lock
+# uv writes this on a bare `uv run` / `uv lock`; installs here come from requirements.txt
+uv.lock
 
 # SOPS workflow — encrypted `secrets.env` is intentionally committable,
 # but every variant (plaintext, manual decrypt copy, editor backup)
