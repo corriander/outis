@@ -2096,6 +2096,13 @@ import {
 
       // Direct render helper for streaming text
       _renderStream = () => {
+        // A stopped turn has already had its final render written into .body and
+        // a stopped indicator appended after it. _ensureStreamLayout below only
+        // looks for an existing .stream-content, so a delta arriving after the
+        // stop appends a fresh one *below* that indicator and draws the message
+        // a second time — as a duplicate reply, or as a stale "Thinking (N
+        // lines)" bar when the reasoning had not closed yet.
+        if (abortCtrl && abortCtrl.signal.aborted) return;
         let dt = markdownModule.normalizeThinkingMarkup(_streamDisplayText(roundText));
         const bodyEl = roundHolder.querySelector('.body');
         const contentEl = _ensureStreamLayout(bodyEl);
