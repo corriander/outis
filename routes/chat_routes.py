@@ -39,6 +39,7 @@ from routes.chat_helpers import (
     save_assistant_response,
     run_post_response_tasks,
     clean_thinking_for_save,
+    stopped_partial_for_save,
     _enforce_chat_privileges,
 )
 from src.action_intents import ToolIntent, classify_tool_intent as _classify_tool_intent
@@ -1654,18 +1655,22 @@ def setup_chat_routes(
                             _stream_set(session, status="done")
                             yield chunk
                 except (asyncio.CancelledError, GeneratorExit):
-                    if full_response and not incognito:
-                        logger.info("Client disconnected mid-stream (chat mode) for session %s, saving partial (%d chars)", session, len(full_response))
-                        _stopped_content, _stopped_md = clean_thinking_for_save(
+                    # Reasoning arrives on its own channel, so where it belongs in
+                    # a cancelled save depends on how far the turn got — see
+                    # stopped_partial_for_save.
+                    if not incognito:
+                        _stopped_content, _stopped_md = stopped_partial_for_save(
                             full_response,
+                            thinking_response,
                             {
-                                "stopped": True,
                                 "model": _actual_model or _answered_by or _requested_model,
                                 "requested_model": _requested_model,
                             },
                         )
-                        sess.add_message(ChatMessage("assistant", _stopped_content, metadata=_stopped_md))
-                        session_manager.save_sessions()
+                        if _stopped_content:
+                            logger.info("Client disconnected mid-stream (chat mode) for session %s, saving partial (%d chars, thinking-only=%s)", session, len(_stopped_content), _stopped_md.get("thinking_incomplete", False))
+                            sess.add_message(ChatMessage("assistant", _stopped_content, metadata=_stopped_md))
+                            session_manager.save_sessions()
                     raise
                 finally:
                     _active_streams.pop(session, None)
@@ -1826,18 +1831,19 @@ def setup_chat_routes(
                     # outer finally from running and left _active_streams
                     # with a stale entry).
                     try:
-                        if full_response and not incognito:
-                            logger.info("Client disconnected mid-stream for session %s, saving partial response (%d chars)", session, len(full_response))
-                            _stopped_content2, _stopped_md2 = clean_thinking_for_save(
+                        if not incognito:
+                            _stopped_content2, _stopped_md2 = stopped_partial_for_save(
                                 full_response,
+                                thinking_response,
                                 {
-                                    "stopped": True,
                                     "model": _actual_model or _answered_by or _requested_model,
                                     "requested_model": _requested_model,
                                 },
                             )
-                            sess.add_message(ChatMessage("assistant", _stopped_content2, metadata=_stopped_md2))
-                            session_manager.save_sessions()
+                            if _stopped_content2:
+                                logger.info("Client disconnected mid-stream for session %s, saving partial response (%d chars)", session, len(_stopped_content2))
+                                sess.add_message(ChatMessage("assistant", _stopped_content2, metadata=_stopped_md2))
+                                session_manager.save_sessions()
                     except Exception:
                         logger.exception("Failed to save partial response on disconnect (session %s)", session)
                     raise

@@ -1082,7 +1082,7 @@ import {
         currentHolder.dataset.raw = stoppedContent;
 
         currentHolder.querySelector('.body').innerHTML =
-          markdownModule.processWithThinking(stoppedContent);
+          markdownModule.processWithThinking(stoppedContent, { complete: false });
         
         // Highlight code blocks
         if (window.hljs) {
