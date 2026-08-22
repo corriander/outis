@@ -8,7 +8,7 @@
 import Storage from './storage.js';
 import uiModule from './ui.js';
 import sessionModule from './sessions.js';
-import chatRenderer from './chatRenderer.js?v=20260722emailfastindex1';
+import chatRenderer from './chatRenderer.js?v=20260821codefenceguard1';
 import chatStream from './chatStream.js';
 import { addAITTSButton } from './tts-ai.js';
 import markdownModule from './markdown.js';
@@ -1073,15 +1073,16 @@ import {
       }
       // Render whatever was accumulated so far
       if (currentHolder && currentAccumulated) {
-        // Store accumulated in a closure variable before it gets cleared
-        const stoppedContent = currentAccumulated;
-        
-        // Store raw content in dataset for consistency with other messages
+        // Store accumulated in a closure variable before it gets cleared.
+        // Through displaySource so a cancelled reply reads, copies and edits
+        // exactly like one that finished — it used to keep the unstripped
+        // stream, tool markup and all.
+        const stoppedContent = chatRenderer.displaySource(currentAccumulated);
+
         currentHolder.dataset.raw = stoppedContent;
-        
-        currentHolder.querySelector('.body').innerHTML = markdownModule.processWithThinking(
-          markdownModule.squashOutsideCode(stoppedContent)
-        );
+
+        currentHolder.querySelector('.body').innerHTML =
+          markdownModule.processWithThinking(stoppedContent);
         
         // Highlight code blocks
         if (window.hljs) {
